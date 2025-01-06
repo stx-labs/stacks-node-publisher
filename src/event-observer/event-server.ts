@@ -1,0 +1,165 @@
+import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http';
+import { logger as defaultLogger } from '@hirosystems/api-toolkit';
+import { AddressInfo } from 'node:net';
+import { Counter, Histogram, Registry, Summary } from 'prom-client';
+
+export type EventMessageHandler = (eventPath: string, eventBody: string) => Promise<void>;
+
+export class EventObserverServer {
+  readonly server: Server;
+  readonly logger = defaultLogger.child({ module: 'EventObserver' });
+  readonly eventMessageHandler: EventMessageHandler;
+  readonly promRegistry: Registry;
+  readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
+
+  constructor(args: { eventMessageHandler: EventMessageHandler; promRegistry: Registry }) {
+    this.eventMessageHandler = args.eventMessageHandler;
+    this.promRegistry = args.promRegistry;
+    this.promMetrics = this.setupPromMetrics();
+    this.server = createServer((req, res) => this.requestListener(req, res));
+  }
+
+  get url(): string {
+    const address = this.server.address() as AddressInfo;
+    return `http://${address.address}:${address.port}`;
+  }
+
+  setupPromMetrics() {
+    const reqCounter = new Counter({
+      registers: [this.promRegistry],
+      name: 'http_request_duration_seconds_count',
+      help: 'Total number of HTTP requests',
+      labelNames: ['method', 'route', 'status_code'],
+    });
+
+    const reqDurationHistogram = new Histogram({
+      registers: [this.promRegistry],
+      name: 'http_request_duration_seconds_bucket',
+      help: 'request duration in seconds',
+      labelNames: ['method', 'route', 'status_code'],
+      buckets: [0.05, 0.1, 0.5, 1, 3, 5, 10],
+    });
+
+    const reqDurationSummary = new Summary({
+      registers: [this.promRegistry],
+      name: 'http_request_summary_seconds',
+      help: 'request duration in seconds summary',
+      labelNames: ['method', 'route', 'status_code'],
+      percentiles: [0.5, 0.9, 0.95, 0.99],
+    });
+
+    return { reqCounter, reqDurationHistogram, reqDurationSummary };
+  }
+
+  async start({ host, port }: { host: string; port: number }): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.server.once('error', err => {
+        this.logger.error(err, 'Error starting event server');
+        reject(err);
+      });
+      this.server.once('listening', () => {
+        this.logger.info(`Event server listening on ${this.url}`);
+        resolve();
+      });
+      this.server.listen({ host, port });
+    });
+  }
+
+  async close(): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.logger.info(`Closing event server...`);
+      this.server.close(err => {
+        if (err) {
+          this.logger.error(err, 'Error closing event server');
+          reject(err);
+        } else {
+          this.logger.info('Event server closed');
+          resolve();
+        }
+      });
+    });
+  }
+
+  requestListener(req: IncomingMessage, res: ServerResponse) {
+    if (req.method !== 'POST') {
+      this.logger.error(`Received non-POST request: ${req.method} ${req.url}`);
+      res.writeHead(405); // Method Not Allowed
+      res.end('Only POST requests are allowed');
+      return;
+    }
+
+    // TODO: also verify that content-type is application/json
+
+    const startTime = process.hrtime(); // Start time for duration tracking
+
+    const eventPath = req.url as string;
+    const method = req.method as string;
+    const contentLength = req.headers['content-length'];
+    this.logger.info(
+      { url: eventPath, contentLength: contentLength },
+      `Received event POST request: ${req.url}, len: ${contentLength}`
+    );
+
+    const logResponse = (statusCode: number) => {
+      const duration = process.hrtime(startTime);
+      const durationInSeconds = duration[0] + duration[1] / 1e9;
+      this.logger.info(
+        {
+          statusCode: statusCode,
+          method: req.method,
+          url: eventPath,
+          responseTime: durationInSeconds,
+          contentLength: contentLength,
+        },
+        'request completed'
+      );
+      const labels = {
+        method: method,
+        route: eventPath,
+        status_code: statusCode.toString(),
+      };
+      this.promMetrics.reqCounter.inc(labels);
+      this.promMetrics.reqDurationHistogram.observe(labels, durationInSeconds);
+      this.promMetrics.reqDurationSummary.observe(labels, durationInSeconds);
+    };
+
+    let body = '';
+
+    // Set the encoding to 'utf8' so that the data chunks are strings directly
+    req.setEncoding('utf8');
+
+    req.on('data', (chunk: string) => {
+      body += chunk; // Accumulate the data chunks as a string
+    });
+
+    req.on('end', () => {
+      // Body has been fully received
+      void this.eventMessageHandler(eventPath, body).then(
+        () => {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('Received successfully!');
+          logResponse(200);
+        },
+        (err: unknown) => {
+          this.logger.error(
+            err,
+            `Error processing event http POST payload: ${eventPath}, len: ${contentLength}`
+          );
+          res.writeHead(500);
+          res.end('Internal Server Error during message processing');
+          logResponse(500);
+        }
+      );
+    });
+
+    req.on('error', err => {
+      this.logger.error(
+        err,
+        `Error reading event http POST payload: ${eventPath}, len: ${contentLength}`
+      );
+      res.writeHead(500);
+      res.end('Internal Server Error during message reading');
+      logResponse(500);
+    });
+  }
+}

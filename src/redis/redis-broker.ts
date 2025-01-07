@@ -53,8 +53,10 @@ export class RedisBroker {
     eventBody: string;
   }) {
     try {
-      // Redis stream message IDs are <millisecondsTime>-<sequenceNumber>
-      const messageId = `${args.timestamp}-${args.sequenceNumber}`;
+      // Redis stream message IDs are <millisecondsTime>-<sequenceNumber>.
+      // However, we don't fully trust our timestamp to always increase monotonically (e.g. NTP glitches),
+      // so we'll just use the sequence number as the timestamp.
+      const messageId = `${args.sequenceNumber}-0`;
       const redisMsg = {
         timestamp: args.timestamp,
         path: args.eventPath,

@@ -38,6 +38,7 @@ const schema = Type.Object({
   PG_MAX_LIFETIME: Type.Number({ default: 0 }),
 
   REDIS_URL: Type.Optional(Type.String()),
+  REDIS_STREAM_KEY_PREFIX: Type.String({ default: '' }),
 });
 type Env = Static<typeof schema>;
 

@@ -23,7 +23,7 @@
         "PGPORT": "5432",
         "PGUSER": "postgres",
         "PGPASSWORD": "postgres",
-        "REDIS_URL": "redis://localhost:7379",
+        "REDIS_URL": "redis://127.0.0.1:7379",
       },
       "killBehavior": "polite",
       "preLaunchTask": "npm: testenv:run",

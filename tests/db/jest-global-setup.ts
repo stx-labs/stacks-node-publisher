@@ -119,17 +119,19 @@ async function waitForPostgres(): Promise<void> {
 }
 
 async function waitForRedis(): Promise<void> {
-  const redisClient = createClient({ url: process.env['REDIS_URL'] });
-  redisClient.on('error', err => console.error('Redis Client Error', err));
+  const redisClient = createClient({
+    url: process.env['REDIS_URL'],
+    name: 'salt-n-pepper-server-tests',
+  });
+  redisClient.on('error', (err: Error) => console.error('Redis Client Error', err));
+  redisClient.once('ready', () => console.log('Connected to Redis successfully!'));
   while (true) {
     try {
       await redisClient.connect();
-      console.log('Connected to Redis successfully!');
       break;
     } catch (error) {
       console.error(`Failed to connect to Redis:`, error);
       await sleep(100);
-      break;
     }
   }
   await redisClient.disconnect();
@@ -157,7 +159,6 @@ export default async function setup(): Promise<void> {
       ],
     });
     pgConfig.PGPORT = pgContainer.bindedPorts[pgPort].toString();
-    console.log(`${pgContainer.image} container started on port ${pgConfig.PGPORT}`);
     for (const entry of Object.entries(pgConfig)) {
       process.env[entry[0]] = entry[1];
     }
@@ -173,7 +174,7 @@ export default async function setup(): Promise<void> {
       ports: [redisPort],
       env: [],
     });
-    process.env['REDIS_URL'] = `redis://localhost:${redisContainer.bindedPorts[redisPort]}`;
+    process.env['REDIS_URL'] = `redis://127.0.0.1:${redisContainer.bindedPorts[redisPort]}`;
     // wait for redis to be ready
     await waitForRedis();
   };

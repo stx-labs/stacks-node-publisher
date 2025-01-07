@@ -1,5 +1,5 @@
 {
-  "name": "client",
+  "name": "salt-and-pepper-client",
   "version": "1.0.0",
   "description": "",
   "main": "./dist/index.js",
@@ -8,6 +8,9 @@
     "build": "rimraf ./dist && tsc --project tsconfig.build.json",
     "prepublishOnly": "npm run build"
   },
+  "files": [
+    "dist/"
+  ],
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -16,6 +19,7 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
+    "@hirosystems/api-toolkit": "^1.7.2",
     "redis": "^4.7.0"
   }
 }

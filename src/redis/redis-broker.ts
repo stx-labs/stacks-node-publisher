@@ -49,8 +49,7 @@ export class RedisBroker {
         path: eventPath,
         body: eventBody,
       };
-      // TODO: figure out stream key
-      await this.addMessage('some stream key', messageId, JSON.stringify(redisMsg));
+      await this.addMessage('all', messageId, JSON.stringify(redisMsg));
     };
   }
 

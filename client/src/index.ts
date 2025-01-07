@@ -1,64 +1,106 @@
-import { createClient, RedisClientType } from "redis";
+import { createClient, RedisClientType } from 'redis';
+import { logger as defaultLogger, waiter, Waiter } from '@hirosystems/api-toolkit';
 
 export type StreamedStacksEventCallback = (
   id: string,
-  timestamp: number,
+  timestamp: string,
   path: string,
   payload: any
 ) => Promise<void>;
 
-const STREAM = "stacks";
+export enum StacksEventStreamType {
+  chainEvents = 'chain_events',
+  signerEvents = 'signer_events',
+  all = 'all',
+}
 
 export class StacksEventStream {
   private readonly client: RedisClientType;
-  private readonly group: string;
-  private readonly consumer: string;
-  private readonly messageId: string;
-  private readonly abort: AbortController;
+  private readonly eventStreamType: StacksEventStreamType;
+  private lastMessageId: string;
 
-  constructor(redisUrl: string, group: string, messageId: string = "0-0") {
-    this.client = createClient({ url: redisUrl });
-    this.group = group;
-    this.consumer = "test";
-    this.messageId = messageId;
+  private readonly abort: AbortController;
+  private readonly streamWaiter: Waiter<void>;
+
+  private readonly logger = defaultLogger.child({ module: 'StacksEventStream' });
+
+  constructor(args: {
+    redisUrl?: string;
+    eventStreamType: StacksEventStreamType;
+    lastMessageId?: string;
+  }) {
+    this.client = createClient({ url: args.redisUrl });
+    this.eventStreamType = args.eventStreamType;
+    this.lastMessageId = args.lastMessageId ?? '0'; // Automatically start at the first message.
     this.abort = new AbortController();
+    this.streamWaiter = waiter();
   }
 
-  async start(callback: StreamedStacksEventCallback) {
+  async connect() {
+    await new Promise<void>((resolve, reject) => {
+      this.client.on('error', err => {
+        this.logger.error(err as Error, 'Redis error');
+        reject(err as Error);
+      });
+      this.client.on('ready', () => {
+        this.logger.info('Connected to Redis');
+        resolve();
+      });
+      this.client.connect().catch((err: unknown) => {
+        this.logger.error(err as Error, 'Error connecting to Redis');
+        reject(err as Error);
+      });
+    });
+  }
+
+  start(callback: StreamedStacksEventCallback) {
+    this.logger.info('Starting event stream ingestion');
+    this.ingestEventStream(callback)
+      .then(() => {
+        this.streamWaiter.finish();
+      })
+      .catch((err: unknown) => {
+        this.logger.error(err as Error, 'event stream error');
+      });
+  }
+
+  private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
     try {
-      const client = await this.client.connect();
       while (!this.abort.signal.aborted) {
-        const results = await client.xReadGroup(
-          this.group,
-          this.consumer,
-          [{ key: STREAM, id: this.messageId }],
+        const results = await this.client.xRead(
+          [{ key: this.eventStreamType, id: this.lastMessageId }],
           {
             COUNT: 1,
-            BLOCK: 1000, // Wait at most 1 second for new messages
+            BLOCK: 1000, // Wait 1 second for new events.
           }
         );
         if (results && results.length > 0) {
           for (const stream of results) {
-            for (const message of stream.messages) {
-              console.log("Stream message:", message);
-              const timestamp = message.timestamp as number;
-              const path = message.path as string;
-              const payload = message.payload;
-
-              await callback(message.id, timestamp, path, payload);
-              await client.xAck(STREAM, this.group, message.id);
-              console.log("Message acknowledged:", message.id);
+            for (const item of stream.messages) {
+              const content = JSON.parse(item.message.content) as {
+                timestamp: string;
+                path: string;
+                body: string;
+              };
+              await eventCallback(
+                item.id,
+                content.timestamp,
+                content.path,
+                JSON.parse(content.body)
+              );
+              this.lastMessageId = item.id;
             }
           }
         }
       }
-    } catch (error) {
-      console.error("Error reading or acknowledging from stream:", error);
+    } catch (error: unknown) {
+      this.logger.error(error as Error, 'Error reading or acknowledging from stream');
     }
   }
 
   async stop() {
     this.abort.abort();
-    await this.client.disconnect();
+    await this.streamWaiter;
+    await this.client.quit();
   }
 }

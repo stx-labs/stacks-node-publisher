@@ -42,8 +42,9 @@ jobs:
         with:
           semantic_version: 19
           extra_plugins: |
-            @semantic-release/changelog
-            @semantic-release/git
+            @semantic-release/changelog@6.0.3
+            @semantic-release/git@10.0.1
+            conventional-changelog-conventionalcommits@6.1.0
 
       - name: Checkout tag
         if: steps.semantic.outputs.new_release_version != ''

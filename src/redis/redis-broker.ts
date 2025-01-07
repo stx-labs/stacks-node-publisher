@@ -8,7 +8,10 @@ export class RedisBroker {
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
   constructor(args: { redisUrl?: string }) {
-    this.client = createClient({ url: args.redisUrl });
+    this.client = createClient({
+      url: args.redisUrl,
+      name: 'salt-n-pepper-server',
+    });
 
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));

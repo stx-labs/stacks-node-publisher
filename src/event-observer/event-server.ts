@@ -124,7 +124,7 @@ export class EventObserverServer {
         {
           statusCode: statusCode,
           method: req.method,
-          url: eventPath,
+          url: url.pathname,
           responseTime: durationInSeconds,
           contentLength: contentLength,
         },
@@ -132,7 +132,7 @@ export class EventObserverServer {
       );
       const labels = {
         method: method,
-        route: eventPath,
+        route: url.pathname,
         status_code: statusCode.toString(),
       };
       this.promMetrics.reqCounter.inc(labels);

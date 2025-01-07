@@ -1,5 +1,5 @@
 import { createClient, RedisClientType } from 'redis';
-import { logger as defaultLogger, waiter, Waiter } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/api-toolkit';
 
 export type StreamedStacksEventCallback = (
   id: string,
@@ -36,21 +36,25 @@ export class StacksEventStream {
     this.streamWaiter = waiter();
   }
 
-  async connect() {
-    await new Promise<void>((resolve, reject) => {
-      this.client.on('error', err => {
-        this.logger.error(err as Error, 'Redis error');
-        reject(err as Error);
+  async connect({ waitForReady }: { waitForReady: boolean }) {
+    // Taken from `RedisBroker`.
+    if (waitForReady) {
+      while (true) {
+        try {
+          await this.client.connect();
+          this.logger.info('Connected to Redis');
+          break;
+        } catch (err) {
+          this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+          await timeout(500);
+        }
+      }
+    } else {
+      void this.client.connect().catch((err: unknown) => {
+        this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+        void timeout(500).then(() => this.connect({ waitForReady }));
       });
-      this.client.on('ready', () => {
-        this.logger.info('Connected to Redis');
-        resolve();
-      });
-      this.client.connect().catch((err: unknown) => {
-        this.logger.error(err as Error, 'Error connecting to Redis');
-        reject(err as Error);
-      });
-    });
+    }
   }
 
   start(callback: StreamedStacksEventCallback) {
@@ -77,16 +81,11 @@ export class StacksEventStream {
         if (results && results.length > 0) {
           for (const stream of results) {
             for (const item of stream.messages) {
-              const content = JSON.parse(item.message.content) as {
-                timestamp: string;
-                path: string;
-                body: string;
-              };
               await eventCallback(
                 item.id,
-                content.timestamp,
-                content.path,
-                JSON.parse(content.body)
+                item.message.timestamp,
+                item.message.path,
+                JSON.parse(item.message.body)
               );
               this.lastMessageId = item.id;
             }

@@ -81,6 +81,7 @@ export class EventObserverServer {
   }
 
   requestListener(req: IncomingMessage, res: ServerResponse) {
+    const startTime = process.hrtime(); // Start time for duration tracking
     const url = new URL(req.url as string, `http://${req.headers.host}`);
 
     if (req.method === 'GET' && /^\/(?:status\/?)?$/.test(url.pathname)) {
@@ -108,9 +109,7 @@ export class EventObserverServer {
       return;
     }
 
-    const startTime = process.hrtime(); // Start time for duration tracking
-
-    const eventPath = req.url as string;
+    const eventPath = url.pathname;
     const method = req.method as string;
     const contentLength = req.headers['content-length'];
     this.logger.info(

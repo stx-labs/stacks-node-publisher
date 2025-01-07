@@ -6,6 +6,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
+import { timeout } from '@hirosystems/api-toolkit';
 
 describe('Endpoint tests', () => {
   let db: PgStore;
@@ -52,6 +53,8 @@ describe('Endpoint tests', () => {
       }
     }
     rl.close();
+
+    await timeout(10000000);
   });
 
   afterAll(async () => {

@@ -1,5 +1,5 @@
 {
-  "name": "salt-and-pepper-client",
+  "name": "@hirosystems/salt-n-pepper-client",
   "version": "1.1.0-alpha.0",
   "description": "",
   "main": "./dist/index.js",
@@ -12,8 +12,8 @@
     "dist/"
   ],
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Hiro Systems",
+  "license": "GPL-3.0-only",
   "devDependencies": {
     "rimraf": "^6.0.1",
     "typescript": "^5.7.2"

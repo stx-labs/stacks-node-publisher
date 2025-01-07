@@ -95,6 +95,16 @@ describe('Endpoint tests', () => {
     expect(body).toMatch(new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
   });
 
+  test('status endpoint check', async () => {
+    const res = await fetch(eventServer.url + '/status');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      server_version: expect.stringMatching(/^salt-n-pepper v/),
+      status: 'ready',
+    });
+  });
+
   test('stream messages from redis', async () => {
     const appRedisClient = createClient({
       url: ENV.REDIS_URL,

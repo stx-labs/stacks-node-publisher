@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http';
-import { logger as defaultLogger } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, SERVER_VERSION } from '@hirosystems/api-toolkit';
 import { AddressInfo } from 'node:net';
 import { Counter, Histogram, Registry, Summary } from 'prom-client';
 
@@ -81,6 +81,18 @@ export class EventObserverServer {
   }
 
   requestListener(req: IncomingMessage, res: ServerResponse) {
+    const url = new URL(req.url as string, `http://${req.headers.host}`);
+
+    if (req.method === 'GET' && /^\/(?:status\/?)?$/.test(url.pathname)) {
+      const status = {
+        server_version: `salt-n-pepper ${SERVER_VERSION.tag} (${SERVER_VERSION.branch}:${SERVER_VERSION.commit})`,
+        status: 'ready',
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(status, null, 2));
+      return;
+    }
+
     if (req.method !== 'POST') {
       this.logger.error(`Received non-POST request: ${req.method} ${req.url}`);
       res.writeHead(405); // Method Not Allowed
@@ -88,7 +100,13 @@ export class EventObserverServer {
       return;
     }
 
-    // TODO: also verify that content-type is application/json
+    // Verify that content-type is application/json
+    if (!req.headers['content-type']?.includes('application/json')) {
+      this.logger.error(`Received non-JSON content-type: ${req.headers['content-type']}`);
+      res.writeHead(415); // Unsupported Media Type
+      res.end('Content-Type must be application/json');
+      return;
+    }
 
     const startTime = process.hrtime(); // Start time for duration tracking
 

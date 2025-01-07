@@ -10,11 +10,14 @@ import { ENV } from '../../src/env';
 import { createClient } from 'redis';
 import { StacksEventStream, StacksEventStreamType } from '../../client/src';
 import { timeout } from '@hirosystems/api-toolkit';
+import { buildPromServer } from '../../src/prom/prom-server';
+import { FastifyInstance } from 'fastify';
 
 describe('Endpoint tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
+  let promServer: FastifyInstance;
 
   beforeAll(async () => {
     db = await PgStore.connect();
@@ -22,8 +25,9 @@ describe('Endpoint tests', () => {
     redisBroker = new RedisBroker({ redisUrl: ENV.REDIS_URL });
     await redisBroker.connect({ waitForReady: true });
 
+    const promRegistry = new Registry();
     eventServer = new EventObserverServer({
-      promRegistry: new Registry(),
+      promRegistry: promRegistry,
       eventMessageHandler: async (eventPath, eventBody) => {
         const dbResult = await db.insertMessage(eventPath, eventBody);
         await redisBroker.addStacksMessage({
@@ -35,6 +39,9 @@ describe('Endpoint tests', () => {
       },
     });
     await eventServer.start({ port: 0, host: '127.0.0.1' });
+
+    promServer = await buildPromServer({ registry: promRegistry });
+    await promServer.listen({ host: ENV.OBSERVER_HOST, port: 0 });
 
     // insert stacks-node events dump
     const payloadDumpFile = './tests/dumps/epoch-3-transition.tsv.gz';
@@ -62,6 +69,7 @@ describe('Endpoint tests', () => {
     await eventServer.close();
     await db.close();
     await redisBroker.close();
+    await promServer.close();
   });
 
   test('status endpoint check', async () => {
@@ -72,6 +80,19 @@ describe('Endpoint tests', () => {
       server_version: expect.stringMatching(/^salt-n-pepper v/),
       status: 'ready',
     });
+  });
+
+  test('prom server test', async () => {
+    const addrs = promServer.addresses();
+    const promUrl = `http://${addrs[0].address}:${addrs[0].port}/metrics`;
+    const res = await fetch(promUrl);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toMatch(/^text\/plain/);
+    const body = await res.text();
+    expect(body).toMatch(/http_request_duration_seconds_bucket/);
+    const expectedLinePrefix =
+      'http_request_duration_seconds_count{method="POST",route="/new_block",status_code="200"}';
+    expect(body).toMatch(new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
   });
 
   test('stream messages from redis', async () => {

@@ -1,6 +1,5 @@
 import { createClient } from 'redis';
-import { logger as defaultLogger } from '@hirosystems/api-toolkit';
-import { sleep } from '../helpers';
+import { logger as defaultLogger, timeout } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 
 export class RedisBroker {
@@ -31,13 +30,13 @@ export class RedisBroker {
           break;
         } catch (err) {
           this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
-          await sleep(500);
+          await timeout(500);
         }
       }
     } else {
       void this.client.connect().catch((err: unknown) => {
         this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
-        void sleep(500).then(() => this.connect({ waitForReady }));
+        void timeout(500).then(() => this.connect({ waitForReady }));
       });
     }
   }
@@ -62,7 +61,7 @@ export class RedisBroker {
         path: args.eventPath,
         body: args.eventBody,
       };
-      const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'stacks';
+      const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
       await this.addMessage(streamKey, messageId, redisMsg);
     } catch (error) {
       this.logger.error(error as Error, 'Failed to add message to Redis');

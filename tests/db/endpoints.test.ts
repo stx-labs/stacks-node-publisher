@@ -68,7 +68,7 @@ describe('Endpoint tests', () => {
       name: 'salt-n-pepper-server-client-test',
     });
     await appRedisClient.connect();
-    const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'stacks';
+    const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
 
     const queuedMessageCount = await appRedisClient.xLen(streamKey);
     expect(queuedMessageCount).toBeGreaterThan(0);

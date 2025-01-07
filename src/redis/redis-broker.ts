@@ -1,61 +1,72 @@
 import { createClient } from 'redis';
 import { logger as defaultLogger } from '@hirosystems/api-toolkit';
-import { EventMessageHandler } from '../event-observer/event-server';
-import { PgStore } from '../pg/pg-store';
+import { sleep } from '../helpers';
+import { ENV } from '../env';
 
 export class RedisBroker {
   private client: ReturnType<typeof createClient>;
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
-  private _connectionStarted = false;
 
   constructor(args: { redisUrl?: string }) {
     this.client = createClient({ url: args.redisUrl });
+
     // Must have a listener for 'error' events to avoid unhandled exceptions
-    this.client.on('error', err => {
-      if (!this._connectionStarted) {
-        console.error('Redis Client Error', err);
-      }
-    });
+    this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
+    this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
+    this.client.on('ready', () => this.logger.info('Redis connection ready'));
   }
 
-  async connect() {
-    this._connectionStarted = true;
-    await new Promise<void>((resolve, reject) => {
-      this.client.on('error', err => {
-        this.logger.error(err as Error, 'Error connecting to Redis');
-        reject(err as Error);
+  async connect({ waitForReady }: { waitForReady: boolean }) {
+    // Note that the default redis client connect strategy is to retry indefinitely,
+    // and so the `client.connect()` call should only actually throw from fatal errors like
+    // a an invalid connection URL, but we'll add some retry logic here just in case.
+    if (waitForReady) {
+      while (true) {
+        try {
+          await this.client.connect();
+          this.logger.info('Connected to Redis');
+          break;
+        } catch (err) {
+          this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+          await sleep(500);
+        }
+      }
+    } else {
+      void this.client.connect().catch((err: unknown) => {
+        this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+        void sleep(500).then(() => this.connect({ waitForReady }));
       });
-      this.client.on('ready', () => {
-        this.logger.info('Connected to Redis');
-        resolve();
-      });
-      this.client.connect().catch((err: unknown) => {
-        this.logger.error(err as Error, 'Error connecting to Redis');
-        reject(err as Error);
-      });
-    });
+    }
   }
 
   async close() {
     await this.client.quit();
   }
 
-  eventMessageHandlerInserter(db: PgStore): EventMessageHandler {
-    return async (eventPath: string, eventBody: string) => {
-      const insertResult = await db.insertMessage(eventPath, eventBody);
-      const messageId = `${insertResult.timestamp}-${insertResult.sequence_number}`;
+  async addStacksMessage(args: {
+    timestamp: string;
+    sequenceNumber: string;
+    eventPath: string;
+    eventBody: string;
+  }) {
+    try {
+      // Redis stream message IDs are <millisecondsTime>-<sequenceNumber>
+      const messageId = `${args.timestamp}-${args.sequenceNumber}`;
       const redisMsg = {
-        timestamp: insertResult.timestamp,
-        path: eventPath,
-        body: eventBody,
+        timestamp: args.timestamp,
+        path: args.eventPath,
+        body: args.eventBody,
       };
-      // TODO: figure out stream key
-      await this.addMessage('some stream key', messageId, JSON.stringify(redisMsg));
-    };
+      const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'stacks';
+      await this.addMessage(streamKey, messageId, redisMsg);
+    } catch (error) {
+      this.logger.error(error as Error, 'Failed to add message to Redis');
+      throw error;
+    }
   }
 
-  async addMessage(streamKey: string, messageId: string, message: string) {
-    const addResult = await this.client.xAdd(streamKey, messageId, { content: message });
+  async addMessage(streamKey: string, messageId: string, message: Record<string, string | Buffer>) {
+    const addResult = await this.client.xAdd(streamKey, messageId, message);
     return addResult;
   }
 }

@@ -1,8 +1,6 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
-import * as assert from 'node:assert';
 import * as zlib from 'node:zlib';
-import * as supertest from 'supertest';
 import { PgStore } from '../../src/pg/pg-store';
 import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
@@ -18,12 +16,19 @@ describe('Endpoint tests', () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({ redisUrl: ENV.REDIS_URL });
-    await redisBroker.connect();
+    await redisBroker.connect({ waitForReady: true });
 
-    const eventMessageHandler = redisBroker.eventMessageHandlerInserter(db);
     eventServer = new EventObserverServer({
-      eventMessageHandler: eventMessageHandler,
       promRegistry: new Registry(),
+      eventMessageHandler: async (eventPath, eventBody) => {
+        const dbResult = await db.insertMessage(eventPath, eventBody);
+        await redisBroker.addStacksMessage({
+          timestamp: dbResult.timestamp,
+          sequenceNumber: dbResult.sequence_number,
+          eventPath,
+          eventBody,
+        });
+      },
     });
     await eventServer.start({ port: 0, host: '127.0.0.1' });
 
@@ -34,7 +39,6 @@ describe('Endpoint tests', () => {
       crlfDelay: Infinity,
     });
     for await (const line of rl) {
-      console.log(line);
       const [_id, _timestamp, path, payload] = line.split('\t');
       // use fetch to POST the payload to the event server
       const res = await fetch(eventServer.url + path, {
@@ -45,8 +49,6 @@ describe('Endpoint tests', () => {
       if (res.status !== 200) {
         console.error(`Failed to POST event: ${path} - ${payload}`);
         throw new Error(`Failed to POST event: ${path} - ${payload}`);
-      } else {
-        console.log(`Posted event: ${path} - ${payload}`);
       }
     }
     rl.close();

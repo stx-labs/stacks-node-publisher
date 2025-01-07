@@ -29,12 +29,31 @@ async function initApp() {
     },
   });
   logger.info('Initializing redis client...');
-  // TODO: initial connection should have a retry mechanism
-  await redisBroker.connect();
+  // Start redis client connection but don't wait for it to be ready, because we want to start the
+  // event server and persist messages to postgres as soon as possible, even if redis is not ready.
+  await redisBroker.connect({ waitForReady: false });
 
   // Setup stacks-node http event observer http server
-  const eventMessageHandler = redisBroker.eventMessageHandlerInserter(db);
-  const eventServer = new EventObserverServer({ promRegistry, eventMessageHandler });
+  const eventServer = new EventObserverServer({
+    promRegistry,
+    eventMessageHandler: async (eventPath, eventBody) => {
+      // Storing the event in postgres in critical, if this fails then throw so the observer server
+      // returns a non-200 and the stacks-node will retry the event POST.
+      const dbResult = await db.insertMessage(eventPath, eventBody);
+      // Storing the event in redis is not critical, fire-and-forget.
+      // TODO: If this fails then log and continue, but later we might need some additional logic here.
+      void redisBroker
+        .addStacksMessage({
+          timestamp: dbResult.timestamp,
+          sequenceNumber: dbResult.sequence_number,
+          eventPath,
+          eventBody,
+        })
+        .catch((error: unknown) => {
+          logger.fatal(error, 'Failed to add message to redis');
+        });
+    },
+  });
   registerShutdownConfig({
     name: 'Event observer server',
     forceKillable: false,

@@ -61,33 +61,6 @@ export class PgStore extends BasePgStore {
     super(sql);
   }
 
-  /*
-  async function handleMessage(message) {
-    const insertQuery = `
-      INSERT INTO messages (content)
-      VALUES ($1)
-      RETURNING sequence_number, EXTRACT(EPOCH FROM created_at)::BIGINT AS timestamp
-    `;
-    const values = [message];
-  
-    try {
-      // Insert into PostgreSQL and retrieve sequence_number and timestamp
-      const result = await pgPool.query(insertQuery, values);
-      const { sequence_number, timestamp } = result.rows[0];
-  
-      // Generate Redis stream message ID using timestamp and sequence number
-      const messageId = `${timestamp}-${sequence_number}`;
-  
-      // Add message to Redis stream
-      await redisClient.xadd('your-stream-key', messageId, 'content', message);
-  
-      console.log(`Message saved to Redis with ID: ${messageId}`);
-    } catch (err) {
-      console.error('Error saving message:', err);
-    }
-  }
-    */
-
   public async insertMessage(
     eventPath: string,
     content: string

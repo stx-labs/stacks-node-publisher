@@ -21,14 +21,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hirosystems/stacks-blockchain-api.git"
+    "url": "git+https://github.com/hirosystems/salt-n-pepper.git"
   },
   "author": "Hiro Systems PBC <engineering@hiro.so> (https://hiro.so)",
   "license": "GPL-3.0",
   "bugs": {
-    "url": "https://github.com/hirosystems/stacks-blockchain-api/issues"
+    "url": "https://github.com/hirosystems/salt-n-pepper/issues"
   },
-  "homepage": "https://github.com/hirosystems/stacks-blockchain-api#readme",
+  "homepage": "https://github.com/hirosystems/salt-n-pepper#readme",
   "devDependencies": {
     "@commitlint/cli": "^19.6.1",
     "@commitlint/config-conventional": "^19.6.0",

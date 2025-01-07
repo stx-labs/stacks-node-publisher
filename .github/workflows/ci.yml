@@ -77,17 +77,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           SEMANTIC_RELEASE_PACKAGE: ${{ github.event.repository.name }}
         with:
-          semantic_version: 19
-          branches: |
-            [
-              '+([0-9])?(.{+([0-9]),x}).x',
-              'main',
-              'next',
-              {
-                name: 'beta',
-                prerelease: true
-              }
-            ]
           extra_plugins: |
             @semantic-release/git
             @semantic-release/changelog

@@ -8,6 +8,8 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { createClient } from 'redis';
+import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { timeout } from '@hirosystems/api-toolkit';
 
 describe('Endpoint tests', () => {
   let db: PgStore;
@@ -89,5 +91,35 @@ describe('Endpoint tests', () => {
     expect(messagedProcessed).toBe(queuedMessageCount);
     expect(lastMsgId).toBe(`${queuedMessageCount}-0`);
     await appRedisClient.quit();
+  });
+
+  test('client lib test', async () => {
+    let lastMsgId = '0';
+    const client = new StacksEventStream({
+      redisUrl: ENV.REDIS_URL,
+      eventStreamType: StacksEventStreamType.all,
+      lastMessageId: lastMsgId,
+    });
+    await client.connect({ waitForReady: true });
+    let messagesProcessed = 0;
+    let lastTimestamp = 0;
+    client.start(async (id, timestamp, path, body) => {
+      lastMsgId = id;
+
+      expect(typeof path).toBe('string');
+      expect(path).not.toBe('');
+
+      expect(typeof body).toBe('object');
+      expect(Object.entries(body as object).length).toBeGreaterThan(0);
+
+      expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
+      lastTimestamp = parseInt(timestamp);
+
+      messagesProcessed++;
+      await Promise.resolve();
+    });
+    await timeout(500);
+    await client.stop();
+    expect(messagesProcessed).toBeGreaterThan(0);
   });
 });

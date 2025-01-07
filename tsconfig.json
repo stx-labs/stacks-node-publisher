@@ -112,5 +112,6 @@
     "./src/**/*.ts",
     "./tests/**/*.ts",
     "./migrations/**/*.ts",
+    "./client/src/**/*.ts",
   ],
 }

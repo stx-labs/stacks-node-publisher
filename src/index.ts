@@ -43,18 +43,15 @@ async function initApp() {
       // Storing the event in postgres in critical, if this fails then throw so the observer server
       // returns a non-200 and the stacks-node will retry the event POST.
       const dbResult = await db.insertMessage(eventPath, eventBody);
-      // Storing the event in redis is not critical, fire-and-forget.
-      // TODO: If this fails then log and continue, but later we might need some additional logic here.
-      void redisBroker
-        .addStacksMessage({
-          timestamp: dbResult.timestamp,
-          sequenceNumber: dbResult.sequence_number,
-          eventPath,
-          eventBody,
-        })
-        .catch((error: unknown) => {
-          logger.fatal(error, 'Failed to add message to redis');
-        });
+      // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
+      // to redis is not critical and we don't want to slow down the event observer server & pg writes.
+      // For now, if this fails then we throw.
+      await redisBroker.addStacksMessage({
+        timestamp: dbResult.timestamp,
+        sequenceNumber: dbResult.sequence_number,
+        eventPath,
+        eventBody,
+      });
     },
   });
   registerShutdownConfig({

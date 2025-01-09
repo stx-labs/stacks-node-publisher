@@ -1,5 +1,5 @@
 services:
-  postgres:
+  redis:
     image: "redis:7"
     ports:
       - "7379:6379"

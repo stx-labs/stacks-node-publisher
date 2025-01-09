@@ -2,6 +2,7 @@ import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http
 import { logger as defaultLogger, SERVER_VERSION } from '@hirosystems/api-toolkit';
 import { AddressInfo } from 'node:net';
 import { Counter, Histogram, Registry, Summary } from 'prom-client';
+import PQueue from 'p-queue';
 
 export type EventMessageHandler = (eventPath: string, eventBody: string) => Promise<void>;
 
@@ -11,6 +12,7 @@ export class EventObserverServer {
   readonly eventMessageHandler: EventMessageHandler;
   readonly promRegistry: Registry;
   readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
+  readonly queue = new PQueue({ concurrency: 1 });
 
   constructor(args: { eventMessageHandler: EventMessageHandler; promRegistry: Registry }) {
     this.eventMessageHandler = args.eventMessageHandler;
@@ -78,6 +80,7 @@ export class EventObserverServer {
         }
       });
     });
+    await this.queue.onEmpty();
   }
 
   requestListener(req: IncomingMessage, res: ServerResponse) {
@@ -151,13 +154,13 @@ export class EventObserverServer {
 
     req.on('end', () => {
       // Body has been fully received
-      void this.eventMessageHandler(eventPath, body).then(
-        () => {
+      void this.queue.add(async () => {
+        try {
+          await this.eventMessageHandler(eventPath, body);
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end('Received successfully!');
           logResponse(200);
-        },
-        (err: unknown) => {
+        } catch (err) {
           this.logger.error(
             err,
             `Error processing event http POST payload: ${eventPath}, len: ${contentLength}`
@@ -166,7 +169,7 @@ export class EventObserverServer {
           res.end('Internal Server Error during message processing');
           logResponse(500);
         }
-      );
+      });
     });
 
     req.on('error', err => {

@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.0...v1.0.1) (2025-01-09)
+
+### Bug Fixes
+
+* redis client must have an error event handler ([#8](https://github.com/hirosystems/salt-n-pepper/issues/8)) ([90f4957](https://github.com/hirosystems/salt-n-pepper/commit/90f4957a7ddf6d2b9b6850157a361d37b6136a3d))
+
 ## 1.0.0 (2025-01-07)
 
 ### Features

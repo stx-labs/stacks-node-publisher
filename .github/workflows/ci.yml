@@ -78,6 +78,7 @@ jobs:
           SEMANTIC_RELEASE_PACKAGE: ${{ github.event.repository.name }}
         with:
           extra_plugins: |
+            @semantic-release/exec
             @semantic-release/git
             @semantic-release/changelog
             conventional-changelog-conventionalcommits

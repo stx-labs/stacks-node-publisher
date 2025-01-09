@@ -18,6 +18,7 @@ export class StacksEventStream {
   private readonly client: RedisClientType;
   private readonly eventStreamType: StacksEventStreamType;
   private lastMessageId: string;
+  private readonly redisStreamPrefix: string;
 
   private readonly abort: AbortController;
   private readonly streamWaiter: Waiter<void>;
@@ -28,12 +29,14 @@ export class StacksEventStream {
     redisUrl?: string;
     eventStreamType: StacksEventStreamType;
     lastMessageId?: string;
+    redisStreamPrefix?: string;
   }) {
     this.client = createClient({ url: args.redisUrl });
     this.eventStreamType = args.eventStreamType;
     this.lastMessageId = args.lastMessageId ?? '0'; // Automatically start at the first message.
     this.abort = new AbortController();
     this.streamWaiter = waiter();
+    this.redisStreamPrefix = args.redisStreamPrefix ?? '';
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -70,14 +73,12 @@ export class StacksEventStream {
 
   private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
     try {
+      const streamKey = this.redisStreamPrefix + this.eventStreamType;
       while (!this.abort.signal.aborted) {
-        const results = await this.client.xRead(
-          [{ key: this.eventStreamType, id: this.lastMessageId }],
-          {
-            COUNT: 1,
-            BLOCK: 1000, // Wait 1 second for new events.
-          }
-        );
+        const results = await this.client.xRead([{ key: streamKey, id: this.lastMessageId }], {
+          COUNT: 1,
+          BLOCK: 1000, // Wait 1 second for new events.
+        });
         if (results && results.length > 0) {
           for (const stream of results) {
             for (const item of stream.messages) {

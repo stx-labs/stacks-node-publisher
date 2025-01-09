@@ -5,5 +5,10 @@ beforeAll(() => {
   // use a random PGSCHEMA for each test to avoid conflicts
   process.env.PGSCHEMA = `test_${crypto.randomUUID()}`;
   logger.info(`Using PGSCHEMA: ${process.env.PGSCHEMA}`);
+
+  // use a random redis stream prefix for each test to avoid conflicts
+  process.env.REDIS_STREAM_KEY_PREFIX = `test_${crypto.randomUUID()}`;
+  logger.info(`Using REDIS_STREAM_KEY_PREFIX: ${process.env.REDIS_STREAM_KEY_PREFIX}`);
+
   ENV.reload();
 });

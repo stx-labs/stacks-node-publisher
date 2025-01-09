@@ -5,12 +5,14 @@ import { ENV } from '../env';
 export class RedisBroker {
   private client: ReturnType<typeof createClient>;
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
+  readonly redisStreamKeyPrefix: string;
 
-  constructor(args: { redisUrl?: string }) {
+  constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string }) {
     this.client = createClient({
       url: args.redisUrl,
       name: 'salt-n-pepper-server',
     });
+    this.redisStreamKeyPrefix = args.redisStreamKeyPrefix;
 
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
@@ -19,6 +21,8 @@ export class RedisBroker {
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
+    this.logger.info(`Using REDIS_STREAM_KEY_PREFIX: '${this.redisStreamKeyPrefix}'`);
+    this.logger.info(`Connecting to Redis at ${ENV.REDIS_URL} ...`);
     // Note that the default redis client connect strategy is to retry indefinitely,
     // and so the `client.connect()` call should only actually throw from fatal errors like
     // a an invalid connection URL, but we'll add some retry logic here just in case.
@@ -61,7 +65,7 @@ export class RedisBroker {
         path: args.eventPath,
         body: args.eventBody,
       };
-      const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
+      const streamKey = this.redisStreamKeyPrefix + 'all';
       await this.addMessage(streamKey, messageId, redisMsg);
     } catch (error) {
       this.logger.error(error as Error, 'Failed to add message to Redis');

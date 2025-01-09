@@ -20,7 +20,10 @@ async function initApp() {
   collectDefaultMetrics({ register: promRegistry });
 
   // Setup redis client
-  const redisBroker = new RedisBroker({ redisUrl: ENV.REDIS_URL });
+  const redisBroker = new RedisBroker({
+    redisUrl: ENV.REDIS_URL,
+    redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+  });
   registerShutdownConfig({
     name: 'Redis client',
     forceKillable: false,

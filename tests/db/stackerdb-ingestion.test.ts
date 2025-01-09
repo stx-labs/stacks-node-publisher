@@ -17,7 +17,10 @@ describe('Stackerdb ingestion tests', () => {
   beforeAll(async () => {
     db = await PgStore.connect();
 
-    redisBroker = new RedisBroker({ redisUrl: ENV.REDIS_URL });
+    redisBroker = new RedisBroker({
+      redisUrl: ENV.REDIS_URL,
+      redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+    });
     await redisBroker.connect({ waitForReady: true });
 
     const promRegistry = new Registry();

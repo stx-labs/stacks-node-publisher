@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.1...v1.0.2) (2025-01-09)
+
+### Bug Fixes
+
+* serialize writes ([#10](https://github.com/hirosystems/salt-n-pepper/issues/10)) ([35a06dd](https://github.com/hirosystems/salt-n-pepper/commit/35a06ddbd28e2337d490a7907b8554e3dd79f2ea))
+
 ## [1.0.1](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.0...v1.0.1) (2025-01-09)
 
 ### Bug Fixes

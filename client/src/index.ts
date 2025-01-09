@@ -37,6 +37,11 @@ export class StacksEventStream {
     this.abort = new AbortController();
     this.streamWaiter = waiter();
     this.redisStreamPrefix = args.redisStreamPrefix ?? '';
+
+    // Must have a listener for 'error' events to avoid unhandled exceptions
+    this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
+    this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
+    this.client.on('ready', () => this.logger.info('Redis connection ready'));
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {

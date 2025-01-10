@@ -31,8 +31,8 @@ describe('Endpoint tests', () => {
     const promRegistry = new Registry();
     eventServer = new EventObserverServer({
       promRegistry: promRegistry,
-      eventMessageHandler: async (eventPath, eventBody) => {
-        const dbResult = await db.insertMessage(eventPath, eventBody);
+      eventMessageHandler: async (eventPath, eventBody, httpReceiveTimestamp) => {
+        const dbResult = await db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
         await redisBroker.addStacksMessage({
           timestamp: dbResult.timestamp,
           sequenceNumber: dbResult.sequence_number,
@@ -54,11 +54,11 @@ describe('Endpoint tests', () => {
     });
     const spyInfoLog = jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}); // Suppress noisy logs during bulk insertion test
     for await (const line of rl) {
-      const [_id, _timestamp, path, payload] = line.split('\t');
+      const [_id, timestamp, path, payload] = line.split('\t');
       // use fetch to POST the payload to the event server
       const res = await fetch(eventServer.url + path, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Original-Timestamp': timestamp },
         body: payload,
       });
       if (res.status !== 200) {

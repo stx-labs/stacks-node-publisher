@@ -19,7 +19,7 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/**', 'coverage/**', 'testing/**', 'chunk-parser/**'],
+    ignores: ['dist/**', 'coverage/**', 'testing/**', 'chunk-parser/**', 'restore.js'],
   },
   {
     rules: {

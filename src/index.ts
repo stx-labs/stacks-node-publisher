@@ -23,6 +23,7 @@ async function initApp() {
   const redisBroker = new RedisBroker({
     redisUrl: ENV.REDIS_URL,
     redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+    db,
   });
   registerShutdownConfig({
     name: 'Redis client',

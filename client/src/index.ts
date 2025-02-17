@@ -1,5 +1,6 @@
 import { createClient, RedisClientType } from 'redis';
 import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/api-toolkit';
+import { randomUUID } from 'node:crypto';
 
 export type StreamedStacksEventCallback = (
   id: string,
@@ -17,6 +18,7 @@ export enum StacksEventStreamType {
 export class StacksEventStream {
   private readonly client: RedisClientType;
   private readonly eventStreamType: StacksEventStreamType;
+  private readonly clientId = randomUUID();
   private lastMessageId: string;
   private readonly redisStreamPrefix: string;
 
@@ -80,21 +82,27 @@ export class StacksEventStream {
     try {
       const streamKey = this.redisStreamPrefix + this.eventStreamType;
       while (!this.abort.signal.aborted) {
-        const results = await this.client.xRead([{ key: streamKey, id: this.lastMessageId }], {
-          COUNT: 1,
-          BLOCK: 1000, // Wait 1 second for new events.
-        });
-        if (results && results.length > 0) {
-          for (const stream of results) {
-            for (const item of stream.messages) {
-              await eventCallback(
-                item.id,
-                item.message.timestamp,
-                item.message.path,
-                JSON.parse(item.message.body)
-              );
-              this.lastMessageId = item.id;
-            }
+        const results = await this.client.xRead(
+          { key: streamKey, id: this.lastMessageId },
+          {
+            COUNT: 1,
+            BLOCK: 1000, // Wait 1 second for new events.
+          }
+        );
+        if (!results || results.length === 0) {
+          continue;
+        }
+        for (const stream of results) {
+          for (const item of stream.messages) {
+            await eventCallback(
+              item.id,
+              item.message.timestamp,
+              item.message.path,
+              JSON.parse(item.message.body)
+            );
+            this.lastMessageId = item.id;
+            // Acknowledge the message so it won't be read again.
+            await this.client.xDel(streamKey, item.id);
           }
         }
       }
@@ -107,5 +115,14 @@ export class StacksEventStream {
     this.abort.abort();
     await this.streamWaiter;
     await this.client.quit();
+  }
+
+  // Announce connection via Redis stream
+  async announceConnection() {
+    const msg = {
+      client_id: this.clientId,
+      last_message_id: this.lastMessageId,
+    };
+    await this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', msg);
   }
 }

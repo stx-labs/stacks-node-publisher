@@ -43,7 +43,12 @@ export class StacksEventStream {
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
     this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
-    this.client.on('ready', () => this.logger.info('Redis connection ready'));
+    this.client.on('ready', () => {
+      this.logger.info('Redis connection ready');
+      void this.announceConnection().catch((err: unknown) => {
+        this.logger.error(err as Error, 'Error announcing connection');
+      });
+    });
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -80,7 +85,7 @@ export class StacksEventStream {
 
   private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
     try {
-      const streamKey = this.redisStreamPrefix + this.eventStreamType;
+      const streamKey = `${this.redisStreamPrefix}${this.eventStreamType}:${this.clientId}`;
       while (!this.abort.signal.aborted) {
         const results = await this.client.xRead(
           { key: streamKey, id: this.lastMessageId },

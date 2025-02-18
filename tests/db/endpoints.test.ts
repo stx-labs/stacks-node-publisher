@@ -25,6 +25,7 @@ describe('Endpoint tests', () => {
     redisBroker = new RedisBroker({
       redisUrl: ENV.REDIS_URL,
       redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      db: db,
     });
     await redisBroker.connect({ waitForReady: true });
 
@@ -129,6 +130,33 @@ describe('Endpoint tests', () => {
   });
 
   test('client lib test', async () => {
+    redisBroker.testRegisterOnLiveStreamTransition(async () => {
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch(eventServer.url + '/test_path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ test: 'transition test data', i }),
+        });
+        if (res.status !== 200) {
+          throw new Error(`Failed to POST event: ${res.status}`);
+        }
+      }
+    });
+
+    const streamDrainedCb = redisBroker.testOnLiveStreamDrained(async () => {
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch(eventServer.url + '/test_path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ test: 'stream drained data', i }),
+        });
+        if (res.status !== 200) {
+          throw new Error(`Failed to POST event: ${res.status}`);
+        }
+      }
+      streamDrainedCb.unregister();
+    });
+
     let lastMsgId = '0';
     const client = new StacksEventStream({
       redisUrl: ENV.REDIS_URL,
@@ -140,6 +168,7 @@ describe('Endpoint tests', () => {
     let messagesProcessed = 0;
     let lastTimestamp = 0;
     client.start(async (id, timestamp, path, body) => {
+      expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
       lastMsgId = id;
 
       expect(typeof path).toBe('string');

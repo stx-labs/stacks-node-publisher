@@ -20,6 +20,7 @@ describe('Stackerdb ingestion tests', () => {
     redisBroker = new RedisBroker({
       redisUrl: ENV.REDIS_URL,
       redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      db: db,
     });
     await redisBroker.connect({ waitForReady: true });
 

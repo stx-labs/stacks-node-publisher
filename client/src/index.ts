@@ -27,6 +27,10 @@ export class StacksEventStream {
 
   private readonly logger = defaultLogger.child({ module: 'StacksEventStream' });
 
+  private readonly GROUP_NAME = 'primary_group';
+  private readonly CONSUMER_NAME = 'primary_consumer';
+  private readonly MSG_BATCH_SIZE = 100;
+
   constructor(args: {
     redisUrl?: string;
     eventStreamType: StacksEventStreamType;
@@ -86,11 +90,21 @@ export class StacksEventStream {
   private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
     try {
       const streamKey = `${this.redisStreamPrefix}${this.eventStreamType}:${this.clientId}`;
+      await this.client.xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
+        MKSTREAM: true,
+      });
       while (!this.abort.signal.aborted) {
-        const results = await this.client.xRead(
-          { key: streamKey, id: this.lastMessageId },
+        // Because we specify the lastMessageId during the announce handshake and the above
+        // xGroupCreate, use '>' here to get the next messages.
+        const results = await this.client.xReadGroup(
+          this.GROUP_NAME,
+          this.CONSUMER_NAME,
           {
-            COUNT: 1,
+            key: streamKey,
+            id: '>',
+          },
+          {
+            COUNT: this.MSG_BATCH_SIZE,
             BLOCK: 1000, // Wait 1 second for new events.
           }
         );
@@ -106,13 +120,30 @@ export class StacksEventStream {
               JSON.parse(item.message.body)
             );
             this.lastMessageId = item.id;
-            // Acknowledge the message so it won't be read again.
+            // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
+            await this.client.xAck(streamKey, this.GROUP_NAME, item.id);
+            // Delete the message from the stream so that it doesn't get reprocessed
             await this.client.xDel(streamKey, item.id);
           }
         }
       }
     } catch (error: unknown) {
-      this.logger.error(error as Error, 'Error reading or acknowledging from stream');
+      if ((error as Error).message.includes('NOGROUP')) {
+        // The redis stream doesn't exist. This can happen if the redis server was resetarted,
+        // or if the client is idle/offline, or if the client is processing messages too slowly.
+        // If this code path is reached, then we're obviously online so we just need to re-initialize
+        // the connection.
+        this.logger.error(
+          error as Error,
+          `The redis stream group for this client was destroyed by the server`
+        );
+        // re-announce connection, re-create group, etc
+        await this.announceConnection();
+        await this.ingestEventStream(eventCallback);
+        return;
+      } else {
+        this.logger.error(error as Error, 'Error reading or acknowledging from stream');
+      }
     }
   }
 

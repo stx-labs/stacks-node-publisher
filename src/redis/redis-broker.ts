@@ -19,6 +19,8 @@ export class RedisBroker {
   readonly abortController = new AbortController();
   readonly db: PgStore;
 
+  private readonly CLIENT_GROUP_NAME = 'primary_group';
+
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
   testRegisterOnLiveStreamTransition(cb: () => Promise<void>) {
     this.testOnLiveStreamTransitionCbs.add(cb);
@@ -28,7 +30,7 @@ export class RedisBroker {
   testRegisterOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
   testOnLiveStreamDrained(cb: () => Promise<void>) {
     this.testRegisterOnLiveStreamTransitionCbs.add(cb);
-    return { unregister: () => this.testOnLiveStreamTransitionCbs.delete(cb) };
+    return { unregister: () => this.testRegisterOnLiveStreamTransitionCbs.delete(cb) };
   }
 
   constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string; db: PgStore }) {
@@ -145,7 +147,7 @@ export class RedisBroker {
           const clientId = msgPayload['client_id'];
           const lastMessageId = msgPayload['last_message_id'];
 
-          // Fire-and-forget promise so multiple clients can connect and backfill at once
+          // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
           const dedicatedClient = this.client.duplicate();
           void this.handleClientConnection(dedicatedClient, clientId, lastMessageId)
             .catch((error: unknown) => {
@@ -205,7 +207,7 @@ export class RedisBroker {
     // NOTE: do not perform the backfilling within a sql transaction because it will use up a connection
     // from the pool for the duration of the backfilling, which could be a long time for large backfills.
     let lastMsgId = '0-0';
-    let lastQueriedSequenceNumber = lastMessageId;
+    let lastQueriedSequenceNumber = lastMessageId.split('-')[0];
     while (!this.abortController.signal.aborted) {
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
@@ -278,18 +280,20 @@ export class RedisBroker {
             key: this.globalStreamKey,
             id: '>',
           },
-          { BLOCK: 1000, COUNT: LIVE_STREAM_BATCH_SIZE }
+          {
+            COUNT: LIVE_STREAM_BATCH_SIZE,
+            BLOCK: 1000,
+          }
         );
       } catch (error) {
         if ((error as Error).message.includes('NOGROUP')) {
           this.logger.warn(error as Error, `Consumer group not found for client ${clientId}`);
           // Destory the global stream consumer group for this client
           await client.xGroupDestroy(this.globalStreamKey, groupKey);
-          // Destory the redis stream for this client
+          // Destory the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
+          await client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME);
+          // Delete the redis stream for this client
           await client.del(clientStreamKey);
-          // TODO: the client is using xRead and will not be notified when this stream is deleted,
-          // the client stream should use a consumer group so that we can perform xGroupDestroy
-          // and the client will see the NOGROUP error from using XREADGROUP and can handle it gracefully.
           break;
         } else {
           this.logger.error(

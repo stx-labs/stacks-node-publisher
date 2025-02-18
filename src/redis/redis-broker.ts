@@ -1,8 +1,9 @@
-import { createClient, RedisClientType } from 'redis';
-import { logger as defaultLogger, Nullable, timeout } from '@hirosystems/api-toolkit';
+import { createClient } from 'redis';
+import { logger as defaultLogger, timeout } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
+import { XReadGroupReturnType } from './redis-types';
 
 enum StreamType {
   ALL = 'all',
@@ -234,15 +235,36 @@ export class RedisBroker {
     this.logger.debug(`Starting live streaming for client ${clientId} from ID ${lastMsgId}`);
 
     while (true) {
-      const messages = await client.xReadGroup(
-        groupKey,
-        consumerKey,
-        {
-          key: this.globalStreamKey,
-          id: '>',
-        },
-        { BLOCK: 1000, COUNT: 100 }
-      );
+      let messages: XReadGroupReturnType;
+      try {
+        messages = await client.xReadGroup(
+          groupKey,
+          consumerKey,
+          {
+            key: this.globalStreamKey,
+            id: '>',
+          },
+          { BLOCK: 1000, COUNT: 100 }
+        );
+      } catch (error) {
+        if ((error as Error).message.includes('NOGROUP')) {
+          this.logger.warn(error as Error, `Consumer group not found for client ${clientId}`);
+          // Destory the global stream consumer group for this client
+          await client.xGroupDestroy(this.globalStreamKey, groupKey);
+          // Destory the redis stream for this client
+          await client.del(clientStreamKey);
+          // TODO: the client is using xRead and will not be notified when this stream is deleted,
+          // the client stream should use a consumer group so that we can perform xGroupDestroy
+          // and the client will see the NOGROUP error from using XREADGROUP and can handle it gracefully.
+          break;
+        } else {
+          this.logger.error(
+            error as Error,
+            `Error reading from global stream for client ${clientId}`
+          );
+          break;
+        }
+      }
 
       if (messages) {
         // TODO: this can be optimized with redis pipelining:
@@ -308,6 +330,39 @@ export class RedisBroker {
     }
     const endLen = await this.client.xLen(this.globalStreamKey);
     this.logger.info(`Trimmed global stream from length ${startLen} to ${endLen}`);
+  }
+
+  // TODO: this should be called on a schedule
+  async pruneIdleClients() {
+    let MAX_IDLE_TIME = 60_000; // 1 minute
+    const debugging = true;
+    if (debugging) {
+      MAX_IDLE_TIME = 2_000; // 2 seconds
+    }
+    const groups = await this.client.xInfoGroups(this.globalStreamKey);
+    const groupConsumers = await Promise.all(
+      groups.map(group => {
+        return this.client
+          .xInfoConsumers(this.globalStreamKey, group.name)
+          .then(consumers => ({ group, consumers }));
+      })
+    );
+    for (const { group, consumers } of groupConsumers) {
+      if (consumers.length > 1) {
+        this.logger.error(`Multiple consumers for group ${group.name}: ${consumers.length}`);
+      }
+      for (const consumer of consumers) {
+        if (consumer.idle > MAX_IDLE_TIME) {
+          this.logger.info(`Pruning idle consumer group ${group.name}`);
+          // TODO: when the group is destroyed here, the live-streaming loop needs to be aware
+          // and stop reading from the global stream and let the client know that the connection is closed
+          await this.client.xGroupDestroy(this.globalStreamKey, group.name);
+        }
+      }
+    }
+    // TODO: should also check for clients that aren't idle but are very slow and causing backpressure
+    // issues on the global stream. They should be terminated and when they reconnect they will enter
+    // the backfilling phase again.
   }
 
   async getGroupMetadata(client: typeof this.client, groupKey: string) {

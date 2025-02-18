@@ -2,6 +2,7 @@ import { createClient, RedisClientType } from 'redis';
 import { logger as defaultLogger, Nullable, timeout } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
+import { sleep } from '../helpers';
 
 enum StreamType {
   ALL = 'all',
@@ -211,12 +212,16 @@ export class RedisBroker {
         await client.xAdd(clientStreamKey, messageId, redisMsg);
         lastMsgId = messageId;
       }
-      // TODO: add backpressure to avoid overwhelming redis memory, e.g. wait until the stream length
-      // is below a certain threshold before continuing
 
       // Update the global stream group to the last message ID so it's not holding onto messages
       // that are already backfilled, using XGROUP SETID.
       await client.xGroupSetId(this.globalStreamKey, groupKey, lastMsgId);
+
+      // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
+      // is below a certain threshold before continuing.
+      while ((await client.xLen(clientStreamKey)) > 100) {
+        await sleep(100);
+      }
     }
 
     for (const cb of this.testOnLiveStreamTransitionCbs) {
@@ -227,6 +232,7 @@ export class RedisBroker {
     // Now we can start streaming live messages from the global redis stream to the client redis stream.
     // Read from the global stream using the consumer group we created above, and write to the client's stream.
     this.logger.debug(`Starting live streaming for client ${clientId} from ID ${lastMsgId}`);
+
     while (true) {
       const messages = await client.xReadGroup(
         groupKey,
@@ -258,6 +264,12 @@ export class RedisBroker {
 
             lastMsgId = id;
           }
+        }
+
+        // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
+        // is below a certain threshold before continuing.
+        while ((await client.xLen(clientStreamKey)) > 100) {
+          await sleep(100);
         }
       } else {
         for (const cb of this.testRegisterOnLiveStreamTransitionCbs) {

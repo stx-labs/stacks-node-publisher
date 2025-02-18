@@ -89,7 +89,7 @@ export class StacksEventStream {
 
   private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
     try {
-      const streamKey = `${this.redisStreamPrefix}${this.eventStreamType}:${this.clientId}`;
+      const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
       await this.client.xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
         MKSTREAM: true,
       });

@@ -167,6 +167,10 @@ export class RedisBroker {
     }
   }
 
+  getClientStreamKey(clientId: string) {
+    return `${this.redisStreamKeyPrefix}client:${StreamType.ALL}:${clientId}`;
+  }
+
   async handleClientConnection(
     client: typeof this.client,
     clientId: string,
@@ -180,9 +184,9 @@ export class RedisBroker {
     const CLIENT_REDIS_STREAM_MAX_LEN = 100;
     const CLIENT_REDIS_BACKPRESSURE_POLL_MS = 100;
 
-    const clientStreamKey = `${this.redisStreamKeyPrefix}${StreamType.ALL}:${clientId}`;
+    const clientStreamKey = this.getClientStreamKey(clientId);
     const groupKey = `${this.redisStreamKeyPrefix}client_group:${clientId}`;
-    const consumerKey = `${this.redisStreamKeyPrefix}consumer_${clientId}`;
+    const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
 
     // We need to create a unique redis stream for this client, then backfill it with messages starting
     // from the lastMessageId provided by the client. Backfilling is performed by reading messages from
@@ -288,12 +292,14 @@ export class RedisBroker {
       } catch (error) {
         if ((error as Error).message.includes('NOGROUP')) {
           this.logger.warn(error as Error, `Consumer group not found for client ${clientId}`);
-          // Destory the global stream consumer group for this client
+          // Destroy the global stream consumer group for this client
           await client.xGroupDestroy(this.globalStreamKey, groupKey);
-          // Destory the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
-          await client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME);
-          // Delete the redis stream for this client
-          await client.del(clientStreamKey);
+          if (await client.exists(clientStreamKey)) {
+            // Destroy the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
+            await client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME);
+            // Delete the redis stream for this client
+            await client.del(clientStreamKey);
+          }
           break;
         } else {
           this.logger.error(
@@ -396,9 +402,16 @@ export class RedisBroker {
       for (const consumer of consumers) {
         if (consumer.idle > MAX_IDLE_TIME) {
           this.logger.info(`Pruning idle consumer group ${group.name}`);
-          // TODO: when the group is destroyed here, the live-streaming loop needs to be aware
-          // and stop reading from the global stream and let the client know that the connection is closed
+          // When the group is destroyed here, the live-streaming loop for this client is notified
+          // via NOGROUP error on xReadGroup and exits.
           await this.client.xGroupDestroy(this.globalStreamKey, group.name);
+          // Destroy the client stream group and delete the client stream, if there's still an online client then
+          // they will be notified via NOGROUP error on xReadGroup and re-init.
+          const clientStreamKey = this.getClientStreamKey(consumer.name.split(':').at(-1) ?? '');
+          if (await this.client.exists(clientStreamKey)) {
+            await this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME);
+            await this.client.del(clientStreamKey);
+          }
         }
       }
     }

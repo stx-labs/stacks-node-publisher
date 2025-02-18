@@ -69,9 +69,17 @@ export class RedisBroker {
         void timeout(500).then(() => this.connect({ waitForReady }));
       });
     }
-    void this.listenForConnections().catch((error: unknown) => {
-      this.logger.error(error as Error, 'Error listening for connections');
-    });
+    const listeningClient = this.client.duplicate();
+    void this.listenForConnections(listeningClient)
+      .catch((error: unknown) => {
+        this.logger.error(error as Error, 'Error listening for connections');
+      })
+      .finally(() => {
+        // Close the listening client connection after handling the connections
+        listeningClient.quit().catch((error: unknown) => {
+          this.logger.error(error as Error, 'Error closing listening client connection');
+        });
+      });
   }
 
   async close() {
@@ -104,11 +112,14 @@ export class RedisBroker {
 
     // TODO: this should be debounced or called on some interval or theshold, not on every message
     await this.trimGlobalStream();
+    // TODO: this should be debounced or called on some interval or theshold, not on every message
+    await this.pruneIdleClients();
   }
 
-  async listenForConnections() {
-    const listeningClient = this.client.duplicate();
+  async listenForConnections(listeningClient: typeof this.client) {
+    // TODO: do duplicated clients also need error event listeners so that the connection-retry works correctly?
     await listeningClient.connect();
+
     while (!this.abortController.signal.aborted) {
       // TODO: if client.quit() is called, will throw an error? if so handle gracefully
       const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
@@ -135,16 +146,31 @@ export class RedisBroker {
           const lastMessageId = msgPayload['last_message_id'];
 
           // Fire-and-forget promise so multiple clients can connect and backfill at once
-          void this.handleClientConnection(clientId, lastMessageId).catch((error: unknown) => {
-            this.logger.error(error as Error, `Error handling client connection for ${clientId}`);
-          });
+          const dedicatedClient = this.client.duplicate();
+          void this.handleClientConnection(dedicatedClient, clientId, lastMessageId)
+            .catch((error: unknown) => {
+              this.logger.error(error as Error, `Error handling client connection for ${clientId}`);
+            })
+            .finally(() => {
+              // Close the dedicated client connection after handling the client
+              dedicatedClient.quit().catch((error: unknown) => {
+                this.logger.error(
+                  error as Error,
+                  `Error closing dedicated client connection for ${clientId}`
+                );
+              });
+            });
         }
       }
     }
   }
 
-  async handleClientConnection(clientId: string, lastMessageId: string) {
-    const client = this.client.duplicate();
+  async handleClientConnection(
+    client: typeof this.client,
+    clientId: string,
+    lastMessageId: string
+  ) {
+    // TODO: do duplicated clients also need error event listeners so that the connection-retry works correctly?
     await client.connect();
 
     const DB_MSG_BATCH_SIZE = 100;
@@ -180,7 +206,7 @@ export class RedisBroker {
     // from the pool for the duration of the backfilling, which could be a long time for large backfills.
     let lastMsgId = '0-0';
     let lastQueriedSequenceNumber = lastMessageId;
-    while (true) {
+    while (!this.abortController.signal.aborted) {
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
       >`
@@ -225,7 +251,10 @@ export class RedisBroker {
 
       // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
       // is below a certain threshold before continuing.
-      while ((await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN) {
+      while (
+        !this.abortController.signal.aborted &&
+        (await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN
+      ) {
         await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
       }
     }
@@ -239,7 +268,7 @@ export class RedisBroker {
     // Read from the global stream using the consumer group we created above, and write to the client's stream.
     this.logger.debug(`Starting live streaming for client ${clientId} from ID ${lastMsgId}`);
 
-    while (true) {
+    while (!this.abortController.signal.aborted) {
       let messages: XReadGroupReturnType;
       try {
         messages = await client.xReadGroup(
@@ -295,7 +324,10 @@ export class RedisBroker {
 
         // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
         // is below a certain threshold before continuing.
-        while ((await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN) {
+        while (
+          !this.abortController.signal.aborted &&
+          (await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN
+        ) {
           await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
         }
       } else {
@@ -337,13 +369,14 @@ export class RedisBroker {
     this.logger.info(`Trimmed global stream from length ${startLen} to ${endLen}`);
   }
 
-  // TODO: this should be called on a schedule
   async pruneIdleClients() {
     let MAX_IDLE_TIME = 60_000; // 1 minute
+
     const debugging = true;
     if (debugging) {
       MAX_IDLE_TIME = 2_000; // 2 seconds
     }
+
     const groups = await this.client.xInfoGroups(this.globalStreamKey);
     const groupConsumers = await Promise.all(
       groups.map(group => {

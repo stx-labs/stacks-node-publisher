@@ -147,6 +147,11 @@ export class RedisBroker {
     const client = this.client.duplicate();
     await client.connect();
 
+    const DB_MSG_BATCH_SIZE = 100;
+    const LIVE_STREAM_BATCH_SIZE = 100;
+    const CLIENT_REDIS_STREAM_MAX_LEN = 100;
+    const CLIENT_REDIS_BACKPRESSURE_POLL_MS = 100;
+
     const clientStreamKey = `${this.redisStreamKeyPrefix}${StreamType.ALL}:${clientId}`;
     const groupKey = `${this.redisStreamKeyPrefix}client_group:${clientId}`;
     const consumerKey = `${this.redisStreamKeyPrefix}consumer_${clientId}`;
@@ -162,7 +167,7 @@ export class RedisBroker {
     // switch from backfilling to live-streaming.
 
     // First, we create a consumer group for the global stream for this client. This ensures that the global
-    // stream will not discard new messages for this client while we're backfilling from postgres.
+    // stream will not discard new messages that this client might after we've finished backfilling from postgres.
     // The special key `$` instructs redis to hold onto all new messages, which could be added to the stream
     // right after the postgres backfilling is complete, but before we transition to live streaming.
     const msgId = '$';
@@ -187,7 +192,7 @@ export class RedisBroker {
         FROM messages
         WHERE sequence_number > ${lastQueriedSequenceNumber}
         ORDER BY sequence_number ASC
-        LIMIT 100
+        LIMIT ${DB_MSG_BATCH_SIZE}
       `;
       const msgsQueried = dbResults.length;
 
@@ -220,8 +225,8 @@ export class RedisBroker {
 
       // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
       // is below a certain threshold before continuing.
-      while ((await client.xLen(clientStreamKey)) > 100) {
-        await sleep(100);
+      while ((await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN) {
+        await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
       }
     }
 
@@ -244,7 +249,7 @@ export class RedisBroker {
             key: this.globalStreamKey,
             id: '>',
           },
-          { BLOCK: 1000, COUNT: 100 }
+          { BLOCK: 1000, COUNT: LIVE_STREAM_BATCH_SIZE }
         );
       } catch (error) {
         if ((error as Error).message.includes('NOGROUP')) {
@@ -290,8 +295,8 @@ export class RedisBroker {
 
         // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
         // is below a certain threshold before continuing.
-        while ((await client.xLen(clientStreamKey)) > 100) {
-          await sleep(100);
+        while ((await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN) {
+          await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
         }
       } else {
         for (const cb of this.testRegisterOnLiveStreamTransitionCbs) {

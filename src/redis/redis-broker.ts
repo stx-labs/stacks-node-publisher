@@ -171,6 +171,10 @@ export class RedisBroker {
     return `${this.redisStreamKeyPrefix}client:${StreamType.ALL}:${clientId}`;
   }
 
+  getClientGlobalStreamGroupKey(clientId: string) {
+    return `${this.redisStreamKeyPrefix}client_group:${clientId}`;
+  }
+
   async handleClientConnection(
     client: typeof this.client,
     clientId: string,
@@ -185,7 +189,7 @@ export class RedisBroker {
     const CLIENT_REDIS_BACKPRESSURE_POLL_MS = 100;
 
     const clientStreamKey = this.getClientStreamKey(clientId);
-    const groupKey = `${this.redisStreamKeyPrefix}client_group:${clientId}`;
+    const groupKey = this.getClientGlobalStreamGroupKey(clientId);
     const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
 
     // We need to create a unique redis stream for this client, then backfill it with messages starting
@@ -415,9 +419,30 @@ export class RedisBroker {
         }
       }
     }
-    // TODO: should also check for clients that aren't idle but are very slow and causing backpressure
-    // issues on the global stream. They should be terminated and when they reconnect they will enter
-    // the backfilling phase again.
+
+    // Check for idle client streams and clean them up
+    const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
+    const clientConsumers = await Promise.all(
+      clientStreamKeys.map(key =>
+        this.client
+          .xInfoConsumers(key, this.CLIENT_GROUP_NAME)
+          .then(consumers => ({ key, consumers }))
+      )
+    );
+    for (const { key, consumers } of clientConsumers) {
+      for (const consumer of consumers) {
+        if (consumer.idle > MAX_IDLE_TIME) {
+          const clientId = key.split(':').at(-1) ?? '';
+          const group = this.getClientGlobalStreamGroupKey(clientId);
+          this.logger.info(`Pruning idle client group ${group}`);
+          await this.client.xGroupDestroy(this.globalStreamKey, group);
+          // Destroy the client stream group and delete the client stream
+          this.logger.info(`Pruning idle client stream ${key}`);
+          await this.client.xGroupDestroy(key, this.CLIENT_GROUP_NAME);
+          await this.client.del(key);
+        }
+      }
+    }
   }
 
   async getGroupMetadata(client: typeof this.client, groupKey: string) {

@@ -3,7 +3,7 @@ import { logger as defaultLogger, timeout } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
-import { XReadGroupReturnType } from './redis-types';
+import { XInfoConsumersResponse, XInfoGroupsResponse, XReadGroupResponse } from './redis-types';
 
 enum StreamType {
   ALL = 'all',
@@ -139,13 +139,13 @@ export class RedisBroker {
         for (const msg of connection.messages) {
           const msgId = msg.id;
           const msgPayload = msg.message;
-          console.log(`New message in ${connectionName} - ${msgId}: ${JSON.stringify(msgPayload)}`);
 
           // Delete the connection request messsage after receiving
           await listeningClient.xDel(connectionStreamKey, msgId);
 
           const clientId = msgPayload['client_id'];
           const lastMessageId = msgPayload['last_message_id'];
+          this.logger.info(`New client connection: ${clientId}, lastMessageId: ${lastMessageId})`);
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
           const dedicatedClient = this.client.duplicate();
@@ -207,8 +207,10 @@ export class RedisBroker {
     // The special key `$` instructs redis to hold onto all new messages, which could be added to the stream
     // right after the postgres backfilling is complete, but before we transition to live streaming.
     const msgId = '$';
-    await client.xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true });
-    await client.xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey);
+    await Promise.all([
+      client.xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true }),
+      client.xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey),
+    ]);
     this.logger.info(`Consumer group ${groupKey} created for client ${clientId}.`);
 
     // Next, we need to backfill the redis stream with messages from postgres.
@@ -257,7 +259,13 @@ export class RedisBroker {
 
       // Update the global stream group to the last message ID so it's not holding onto messages
       // that are already backfilled, using XGROUP SETID.
-      await client.xGroupSetId(this.globalStreamKey, groupKey, lastMsgId);
+      // TODO: this can throw NOGROUP error if the group is destroyed, handle that gracefully
+      await client
+        .xGroupSetId(this.globalStreamKey, groupKey, lastMsgId)
+        .catch((error: unknown) => {
+          console.error(error);
+          throw error;
+        });
 
       // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
       // is below a certain threshold before continuing.
@@ -279,7 +287,7 @@ export class RedisBroker {
     this.logger.debug(`Starting live streaming for client ${clientId} from ID ${lastMsgId}`);
 
     while (!this.abortController.signal.aborted) {
-      let messages: XReadGroupReturnType;
+      let messages: XReadGroupResponse;
       try {
         messages = await client.xReadGroup(
           groupKey,
@@ -299,10 +307,12 @@ export class RedisBroker {
           // Destroy the global stream consumer group for this client
           await client.xGroupDestroy(this.globalStreamKey, groupKey);
           if (await client.exists(clientStreamKey)) {
-            // Destroy the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
-            await client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME);
-            // Delete the redis stream for this client
-            await client.del(clientStreamKey);
+            await Promise.all([
+              // Destroy the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
+              client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
+              // Delete the redis stream for this client
+              client.del(clientStreamKey),
+            ]);
           }
           break;
         } else {
@@ -323,8 +333,7 @@ export class RedisBroker {
 
             this.logger.debug(`Received message ${id} from global stream for client ${clientId}`);
 
-            // TODO: add backpressure to avoid overwhelming redis memory, e.g. wait until the stream length
-            // is below a certain threshold before continuing
+            // TODO: pipeline these xAdd and xAck calls
 
             // Process message (send to client)
             await client.xAdd(clientStreamKey, id, message);
@@ -384,37 +393,60 @@ export class RedisBroker {
   }
 
   async pruneIdleClients() {
+    // Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
+    // up with the global stream, otherwise the global stream will continue to grow and OOM redis.
     let MAX_IDLE_TIME = 60_000; // 1 minute
+    let MAX_MSG_LAG = 200;
 
     const debugging = true;
     if (debugging) {
       MAX_IDLE_TIME = 2_000; // 2 seconds
+      MAX_MSG_LAG = 102;
     }
 
-    const groups = await this.client.xInfoGroups(this.globalStreamKey);
-    const groupConsumers = await Promise.all(
-      groups.map(group => {
-        return this.client
-          .xInfoConsumers(this.globalStreamKey, group.name)
-          .then(consumers => ({ group, consumers }));
-      })
+    const globalStreamInfo = await this.client.xInfoStream(this.globalStreamKey);
+    let lastEntryID: number | null = null;
+    if (globalStreamInfo.lastEntry) {
+      lastEntryID = parseInt(globalStreamInfo.lastEntry.id.split('-')[0]);
+    }
+
+    const globalGroups = await this.client.xInfoGroups(this.globalStreamKey);
+    const globalConsumers = await Promise.all(
+      globalGroups.map(group => this.client.xInfoConsumers(this.globalStreamKey, group.name))
     );
-    for (const { group, consumers } of groupConsumers) {
+    const globalClients = globalGroups.map((group, i) => ({
+      group,
+      consumers: globalConsumers[i],
+    }));
+    for (const { group, consumers } of globalClients) {
       if (consumers.length > 1) {
-        this.logger.error(`Multiple consumers for group ${group.name}: ${consumers.length}`);
+        this.logger.error(
+          `Multiple consumers for global stream group ${group.name}: ${consumers.length}`
+        );
       }
       for (const consumer of consumers) {
-        if (consumer.idle > MAX_IDLE_TIME) {
-          this.logger.info(`Pruning idle consumer group ${group.name}`);
+        const msgsBehind = lastEntryID
+          ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
+          : 0;
+        const isIdle = consumer.idle > MAX_IDLE_TIME;
+        const isTooSlow = msgsBehind > MAX_MSG_LAG;
+        if (isIdle || isTooSlow) {
+          const clientId = consumer.name.split(':').at(-1) ?? '';
+          this.logger.info(
+            `Detected idle or slow consumer group, client: ${clientId}, idle ms: ${consumer.idle}, msgs behind: ${msgsBehind}`
+          );
           // When the group is destroyed here, the live-streaming loop for this client is notified
           // via NOGROUP error on xReadGroup and exits.
           await this.client.xGroupDestroy(this.globalStreamKey, group.name);
+
           // Destroy the client stream group and delete the client stream, if there's still an online client then
           // they will be notified via NOGROUP error on xReadGroup and re-init.
-          const clientStreamKey = this.getClientStreamKey(consumer.name.split(':').at(-1) ?? '');
+          const clientStreamKey = this.getClientStreamKey(clientId);
           if (await this.client.exists(clientStreamKey)) {
-            await this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME);
-            await this.client.del(clientStreamKey);
+            await Promise.all([
+              this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
+              this.client.del(clientStreamKey),
+            ]);
           }
         }
       }
@@ -422,24 +454,72 @@ export class RedisBroker {
 
     // Check for idle client streams and clean them up
     const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
-    const clientConsumers = await Promise.all(
-      clientStreamKeys.map(key =>
-        this.client
-          .xInfoConsumers(key, this.CLIENT_GROUP_NAME)
-          .then(consumers => ({ key, consumers }))
-      )
+    const clientStreamResponse = await Promise.all(
+      clientStreamKeys.flatMap(key => [
+        this.client.xInfoConsumers(key, this.CLIENT_GROUP_NAME).catch((error: unknown) => {
+          if ((error as Error).message.includes('NOGROUP')) {
+            return [];
+          } else {
+            this.logger.error(
+              error as Error,
+              `Error performing xInfoConsumers consumers for ${key}`
+            );
+            throw error;
+          }
+        }),
+        this.client.xInfoGroups(key),
+      ])
     );
-    for (const { key, consumers } of clientConsumers) {
+    const clientStreamInfo = clientStreamKeys.map((clientStreamKey, i) => ({
+      clientStreamKey,
+      consumers: clientStreamResponse[i * 2] as XInfoConsumersResponse,
+      groups: clientStreamResponse[i * 2 + 1] as XInfoGroupsResponse,
+    }));
+    for (const { clientStreamKey, consumers, groups } of clientStreamInfo) {
+      if (consumers.length === 0) {
+        // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
+        this.logger.warn(`Dangling client stream ${clientStreamKey}`);
+        await Promise.all([
+          this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
+          this.client.del(clientStreamKey),
+        ]);
+      }
+      if (consumers.length > 1) {
+        this.logger.error(
+          `Multiple consumers for client stream ${clientStreamKey}: ${consumers.length}`
+        );
+      }
+      if (groups.length > 1) {
+        this.logger.error(`Multiple groups for client stream ${clientStreamKey}: ${groups.length}`);
+      }
       for (const consumer of consumers) {
         if (consumer.idle > MAX_IDLE_TIME) {
-          const clientId = key.split(':').at(-1) ?? '';
-          const group = this.getClientGlobalStreamGroupKey(clientId);
-          this.logger.info(`Pruning idle client group ${group}`);
-          await this.client.xGroupDestroy(this.globalStreamKey, group);
+          const clientId = clientStreamKey.split(':').at(-1) ?? '';
+          const groupId = this.getClientGlobalStreamGroupKey(clientId);
+          const globalStreamGroup = globalGroups.find(g => g.name === groupId);
+          const globalStreamMsgsBehind =
+            lastEntryID && globalStreamGroup
+              ? lastEntryID - parseInt(globalStreamGroup.lastDeliveredId.split('-')[0])
+              : 0;
+          const clientStreamMsgsBehind = lastEntryID
+            ? lastEntryID - parseInt(groups[0].lastDeliveredId.split('-')[0])
+            : 0;
+
+          this.logger.info(
+            `Detected idle client stream ${clientId}, idle ms: ${consumer.idle}, msgs behind: global=${globalStreamMsgsBehind}, client=${clientStreamMsgsBehind}`
+          );
+          // Destroy the global stream consumer group for this client
+          await this.client.xGroupDestroy(this.globalStreamKey, groupId);
           // Destroy the client stream group and delete the client stream
-          this.logger.info(`Pruning idle client stream ${key}`);
-          await this.client.xGroupDestroy(key, this.CLIENT_GROUP_NAME);
-          await this.client.del(key);
+          if (await this.client.exists(clientStreamKey)) {
+            this.logger.info(`Pruning idle client stream ${clientStreamKey}`);
+            await Promise.all([
+              this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
+              this.client.del(clientStreamKey),
+            ]);
+          } else {
+            this.logger.warn(`Unexpected client stream ${clientStreamKey} does not exist`);
+          }
         }
       }
     }

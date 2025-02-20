@@ -18,7 +18,7 @@ export enum StacksEventStreamType {
 export class StacksEventStream {
   private readonly client: RedisClientType;
   private readonly eventStreamType: StacksEventStreamType;
-  private readonly clientId = randomUUID();
+  private clientId = randomUUID();
   private lastMessageId: string;
   private readonly redisStreamPrefix: string;
 
@@ -47,12 +47,7 @@ export class StacksEventStream {
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
     this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
-    this.client.on('ready', () => {
-      this.logger.info('Redis connection ready');
-      void this.announceConnection().catch((err: unknown) => {
-        this.logger.error(err as Error, 'Error announcing connection');
-      });
-    });
+    this.client.on('ready', () => this.logger.info('Redis connection ready'));
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -89,10 +84,24 @@ export class StacksEventStream {
 
   private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
     try {
+      // Reset clientId for each new connection, this prevents race-conditions around cleanup
+      // for any previous connections.
+      this.clientId = randomUUID();
+      this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
       const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
-      await this.client.xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
-        MKSTREAM: true,
-      });
+
+      const handshakeMsg = {
+        client_id: this.clientId,
+        last_message_id: this.lastMessageId,
+      };
+      await Promise.all([
+        // Announce connection
+        this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg),
+        this.client.xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
+          MKSTREAM: true,
+        }),
+      ]);
+
       while (!this.abort.signal.aborted) {
         // Because we specify the lastMessageId during the announce handshake and the above
         // xGroupCreate, use '>' here to get the next messages.
@@ -129,7 +138,7 @@ export class StacksEventStream {
       }
     } catch (error: unknown) {
       if ((error as Error).message.includes('NOGROUP')) {
-        // The redis stream doesn't exist. This can happen if the redis server was resetarted,
+        // The redis stream doesn't exist. This can happen if the redis server was restarted,
         // or if the client is idle/offline, or if the client is processing messages too slowly.
         // If this code path is reached, then we're obviously online so we just need to re-initialize
         // the connection.
@@ -138,10 +147,10 @@ export class StacksEventStream {
           `The redis stream group for this client was destroyed by the server`
         );
         // re-announce connection, re-create group, etc
-        await this.announceConnection();
         await this.ingestEventStream(eventCallback);
         return;
       } else {
+        // TODO: what are other expected errors and how should we handle them?
         this.logger.error(error as Error, 'Error reading or acknowledging from stream');
       }
     }
@@ -151,14 +160,5 @@ export class StacksEventStream {
     this.abort.abort();
     await this.streamWaiter;
     await this.client.quit();
-  }
-
-  // Announce connection via Redis stream
-  async announceConnection() {
-    const msg = {
-      client_id: this.clientId,
-      last_message_id: this.lastMessageId,
-    };
-    await this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', msg);
   }
 }

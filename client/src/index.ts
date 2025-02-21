@@ -94,13 +94,16 @@ export class StacksEventStream {
         client_id: this.clientId,
         last_message_id: this.lastMessageId,
       };
-      await Promise.all([
+
+      await this.client
+        .multi()
         // Announce connection
-        this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg),
-        this.client.xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
+        .xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg)
+        // Create group for this stream
+        .xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
           MKSTREAM: true,
-        }),
-      ]);
+        })
+        .exec();
 
       while (!this.abort.signal.aborted) {
         // Because we specify the lastMessageId during the announce handshake and the above
@@ -129,10 +132,14 @@ export class StacksEventStream {
               JSON.parse(item.message.body)
             );
             this.lastMessageId = item.id;
-            // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
-            await this.client.xAck(streamKey, this.GROUP_NAME, item.id);
-            // Delete the message from the stream so that it doesn't get reprocessed
-            await this.client.xDel(streamKey, item.id);
+
+            await this.client
+              .multi()
+              // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
+              .xAck(streamKey, this.GROUP_NAME, item.id)
+              // Delete the message from the stream so that it doesn't get reprocessed
+              .xDel(streamKey, item.id)
+              .exec();
           }
         }
       }
@@ -152,6 +159,10 @@ export class StacksEventStream {
       } else {
         // TODO: what are other expected errors and how should we handle them?
         this.logger.error(error as Error, 'Error reading or acknowledging from stream');
+        this.logger.info('Reconnecting to redis stream');
+        await timeout(1000);
+        await this.ingestEventStream(eventCallback);
+        return;
       }
     }
   }

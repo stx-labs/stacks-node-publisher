@@ -72,16 +72,26 @@ export class RedisBroker {
       });
     }
     const listeningClient = this.client.duplicate();
-    void this.listenForConnections(listeningClient)
-      .catch((error: unknown) => {
-        this.logger.error(error as Error, 'Error listening for connections');
-      })
-      .finally(() => {
-        // Close the listening client connection after handling the connections
-        listeningClient.quit().catch((error: unknown) => {
-          this.logger.error(error as Error, 'Error closing listening client connection');
-        });
+    listeningClient.on('error', (err: Error) =>
+      this.logger.error(err, 'Redis error on client connection listener')
+    );
+
+    const connectionListener = async () => {
+      await listeningClient.connect();
+      while (!this.abortController.signal.aborted) {
+        try {
+          await this.listenForConnections(listeningClient);
+        } catch (error) {
+          this.logger.error(error as Error, 'Error listening for connections');
+          await sleep(1000);
+        }
+      }
+      // Close the listening client connection after handling the connections
+      listeningClient.quit().catch((error: unknown) => {
+        this.logger.error(error as Error, 'Error closing listening client connection');
       });
+    };
+    void connectionListener();
   }
 
   async close() {
@@ -119,12 +129,9 @@ export class RedisBroker {
   }
 
   async listenForConnections(listeningClient: typeof this.client) {
-    // TODO: do duplicated clients also need error event listeners so that the connection-retry works correctly?
-    await listeningClient.connect();
-
+    const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
     while (!this.abortController.signal.aborted) {
       // TODO: if client.quit() is called, will throw an error? if so handle gracefully
-      const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
       const connections = await listeningClient.xRead(
         { key: connectionStreamKey, id: '0-0' },
         {
@@ -135,7 +142,6 @@ export class RedisBroker {
         continue;
       }
       for (const connection of connections) {
-        const connectionName = connection.name;
         for (const msg of connection.messages) {
           const msgId = msg.id;
           const msgPayload = msg.message;
@@ -149,6 +155,12 @@ export class RedisBroker {
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
           const dedicatedClient = this.client.duplicate();
+          dedicatedClient.on('error', (err: Error) => {
+            this.logger.error(
+              err,
+              `Redis error on dedicated client connection for client ${clientId}`
+            );
+          });
           void this.handleClientConnection(dedicatedClient, clientId, lastMessageId)
             .catch((error: unknown) => {
               this.logger.error(error as Error, `Error handling client connection for ${clientId}`);
@@ -207,10 +219,11 @@ export class RedisBroker {
     // The special key `$` instructs redis to hold onto all new messages, which could be added to the stream
     // right after the postgres backfilling is complete, but before we transition to live streaming.
     const msgId = '$';
-    await Promise.all([
-      client.xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true }),
-      client.xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey),
-    ]);
+    await this.client
+      .multi()
+      .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
+      .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)
+      .exec();
     this.logger.info(`Consumer group ${groupKey} created for client ${clientId}.`);
 
     // Next, we need to backfill the redis stream with messages from postgres.
@@ -307,12 +320,13 @@ export class RedisBroker {
           // Destroy the global stream consumer group for this client
           await client.xGroupDestroy(this.globalStreamKey, groupKey);
           if (await client.exists(clientStreamKey)) {
-            await Promise.all([
+            await client
+              .multi()
               // Destroy the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
-              client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
+              .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
               // Delete the redis stream for this client
-              client.del(clientStreamKey),
-            ]);
+              .del(clientStreamKey)
+              .exec();
           }
           break;
         } else {
@@ -443,10 +457,11 @@ export class RedisBroker {
           // they will be notified via NOGROUP error on xReadGroup and re-init.
           const clientStreamKey = this.getClientStreamKey(clientId);
           if (await this.client.exists(clientStreamKey)) {
-            await Promise.all([
-              this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
-              this.client.del(clientStreamKey),
-            ]);
+            await this.client
+              .multi()
+              .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
+              .del(clientStreamKey)
+              .exec();
           }
         }
       }
@@ -479,10 +494,11 @@ export class RedisBroker {
       if (consumers.length === 0) {
         // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
-        await Promise.all([
-          this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
-          this.client.del(clientStreamKey),
-        ]);
+        await this.client
+          .multi()
+          .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
+          .del(clientStreamKey)
+          .exec();
       }
       if (consumers.length > 1) {
         this.logger.error(
@@ -513,10 +529,11 @@ export class RedisBroker {
           // Destroy the client stream group and delete the client stream
           if (await this.client.exists(clientStreamKey)) {
             this.logger.info(`Pruning idle client stream ${clientStreamKey}`);
-            await Promise.all([
-              this.client.xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME),
-              this.client.del(clientStreamKey),
-            ]);
+            await this.client
+              .multi()
+              .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
+              .del(clientStreamKey)
+              .exec();
           } else {
             this.logger.warn(`Unexpected client stream ${clientStreamKey} does not exist`);
           }

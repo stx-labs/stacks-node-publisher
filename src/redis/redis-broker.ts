@@ -10,7 +10,8 @@ enum StreamType {
 }
 
 export class RedisBroker {
-  private client: ReturnType<typeof createClient>;
+  client: ReturnType<typeof createClient>;
+  ingestionClient: ReturnType<typeof createClient>;
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
   readonly redisStreamKeyPrefix: string;
@@ -46,6 +47,16 @@ export class RedisBroker {
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
     this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
     this.client.on('ready', () => this.logger.info('Redis connection ready'));
+
+    // Create a separate client for ingestion that doesn't use the offline queue because
+    // we implement logic for this ourselves in a way that avoid backpressure issues.
+    this.ingestionClient = this.client.duplicate({
+      disableOfflineQueue: true,
+      name: 'snp-ingestion',
+    });
+    this.ingestionClient.on('error', (err: Error) =>
+      this.logger.error(err, 'Redis error on ingestion client')
+    );
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -53,24 +64,31 @@ export class RedisBroker {
     this.logger.info(`Connecting to Redis at ${ENV.REDIS_URL} ...`);
     // Note that the default redis client connect strategy is to retry indefinitely,
     // and so the `client.connect()` call should only actually throw from fatal errors like
-    // a an invalid connection URL, but we'll add some retry logic here just in case.
-    if (waitForReady) {
-      while (true) {
-        try {
-          await this.client.connect();
-          this.logger.info('Connected to Redis');
-          break;
-        } catch (err) {
-          this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
-          await timeout(500);
-        }
+    // a an invalid connection URL.
+    const connectClients = async () => {
+      try {
+        await this.client.connect();
+        await this.ingestionClient.connect();
+        const primaryClientID = await this.client.clientId();
+        const ingestionClientID = await this.ingestionClient.clientId();
+        this.logger.info(
+          `Connected to Redis, client ID: ${primaryClientID}, ingestion client ID: ${ingestionClientID}`
+        );
+      } catch (err) {
+        this.logger.error(err as Error, 'Fatal error connecting to Redis');
+        throw err;
       }
+    };
+
+    if (waitForReady) {
+      await connectClients();
     } else {
-      void this.client.connect().catch((err: unknown) => {
-        this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
-        void timeout(500).then(() => this.connect({ waitForReady }));
+      void connectClients().catch((err: unknown) => {
+        this.logger.error(err as Error, 'Fatal error connecting to Redis');
+        process.exit(1);
       });
     }
+
     const listeningClient = this.client.duplicate();
     listeningClient.on('error', (err: Error) =>
       this.logger.error(err, 'Redis error on client connection listener')
@@ -99,7 +117,20 @@ export class RedisBroker {
     await this.client.quit();
   }
 
-  async addStacksMessage(args: {
+  public async addStacksMessage(args: {
+    timestamp: string;
+    sequenceNumber: string;
+    eventPath: string;
+    eventBody: string;
+  }) {
+    try {
+      await this.handleMsg(args);
+    } catch (error) {
+      this.logger.error(error, 'Failed to add message to Redis');
+    }
+  }
+
+  private async handleMsg(args: {
     timestamp: string;
     sequenceNumber: string;
     eventPath: string;
@@ -111,15 +142,61 @@ export class RedisBroker {
     const messageId = `${args.sequenceNumber}-0`;
 
     try {
+      // If redis was unreachable when the last message(s) were added to the global stream,
+      // then we need to make sure we don't create msg gaps in the stream. This can be done by
+      // checking the last message ID in the stream and making sure it's exactly 1 less than the
+      // sequence number of this new message.
+      //
+      // If there's a gap then we could either backfill from pg, which is tricky. It needs an
+      // atomic switch from backfilling to live-streaming and backpressure handling. It could
+      // also take a while to complete so unclear on what to do when subsequent messages come in.
+      //
+      // So instead, we DEL the global stream and all client streams, which triggers a re-initialization
+      // of all clients so that they backfill the missing msgs from pg. This is simpler but could cause a
+      // lot of churn if redis is frequently unreachable and/or unavailable for a long time.
+      const streamInfo = await this.ingestionClient
+        .xInfoStream(this.globalStreamKey)
+        .catch((error: unknown) => {
+          if ((error as Error).message?.includes('ERR no such key')) {
+            return null;
+          }
+          throw error;
+        });
+
+      // If there are groups (consumers) on the stream and the stream isn't new/empty, then check for gaps.
+      if (streamInfo && streamInfo.groups > 0 && streamInfo.lastEntry) {
+        const lastEntryId = parseInt(streamInfo.lastEntry.id.split('-')[0]);
+        if (lastEntryId + 1 < parseInt(args.sequenceNumber)) {
+          this.logger.warn(
+            `Detected gap in global stream, lastEntryId=${lastEntryId}, sequenceNumber=${args.sequenceNumber}`
+          );
+          // Delete the global stream and all client streams.
+          const groups = await this.ingestionClient.xInfoGroups(this.globalStreamKey);
+          const multi = this.ingestionClient.multi();
+          multi.del(this.globalStreamKey);
+          for (const group of groups) {
+            const clientStream = this.getClientStreamKey(group.name.split(':').at(-1) ?? '');
+            multi.del(clientStream);
+          }
+          await multi.exec();
+        }
+      }
+
       const globalRedisMsg = {
         timestamp: args.timestamp,
         path: args.eventPath,
         body: args.eventBody,
       };
-      await this.client.xAdd(this.globalStreamKey, messageId, globalRedisMsg);
+      await this.ingestionClient.xAdd(this.globalStreamKey, messageId, globalRedisMsg);
     } catch (error) {
-      this.logger.error(error as Error, 'Failed to add message to global Redis stream');
-      throw error;
+      // Ignore error if it's a duplicate message, which could happen if a previous xadd succeeded
+      // on the server but failed to send the response back to the client (e.g. network error).
+      if ((error as Error).message?.includes('XADD is equal or smaller than the target')) {
+        this.logger.warn(`Ignore duplicate message ID ${args.sequenceNumber}`);
+      } else {
+        this.logger.error(error as Error, 'Failed to add message to global Redis stream');
+        throw error;
+      }
     }
 
     // TODO: this should be debounced or called on some interval or theshold, not on every message
@@ -319,6 +396,7 @@ export class RedisBroker {
           // Destroy the global stream consumer group for this client
           await client.xGroupDestroy(this.globalStreamKey, groupKey);
           if (await client.exists(clientStreamKey)) {
+            // TODO: this could just be a DEL because it will also destroy the group
             await client
               .multi()
               // Destroy the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
@@ -395,9 +473,10 @@ export class RedisBroker {
         strategyModifier: '=', // '~'
       });
     } else {
-      this.logger.info(`No groups are active, trimming global stream to 0`);
-      // No groups are active, so we can trim the stream to 0
-      await this.client.xTrim(this.globalStreamKey, 'MAXLEN', 0, {
+      this.logger.info(`No groups are active, trimming global stream to the last message`);
+      // No groups are active, so we can trim the stream to 1, we keep the last message
+      // so the ingestion code can still read the last message ID.
+      await this.client.xTrim(this.globalStreamKey, 'MAXLEN', 1, {
         strategyModifier: '=', // '~'
       });
     }
@@ -417,12 +496,13 @@ export class RedisBroker {
       MAX_MSG_LAG = 102;
     }
 
-    const globalStreamInfo = await this.client.xInfoStream(this.globalStreamKey);
-    let lastEntryID: number | null = null;
-    if (globalStreamInfo.lastEntry) {
-      lastEntryID = parseInt(globalStreamInfo.lastEntry.id.split('-')[0]);
-    }
+    // TODO: this can use `XINFO STREAM key [FULL [COUNT 1]]` to also get the groups and consumers atomicly in
+    // a single call. It's not supported in the redis library yet, so it needs manual parsing.
 
+    const globalStreamInfo = await this.client.xInfoStream(this.globalStreamKey);
+    const lastEntryID = globalStreamInfo.lastEntry?.id
+      ? parseInt(globalStreamInfo.lastEntry.id.split('-')[0])
+      : null;
     const globalGroups = await this.client.xInfoGroups(this.globalStreamKey);
     const globalConsumers = await Promise.all(
       globalGroups.map(group => this.client.xInfoConsumers(this.globalStreamKey, group.name))
@@ -456,6 +536,7 @@ export class RedisBroker {
           // they will be notified via NOGROUP error on xReadGroup and re-init.
           const clientStreamKey = this.getClientStreamKey(clientId);
           if (await this.client.exists(clientStreamKey)) {
+            // TODO: this could just be a DEL because it will also destroy the group
             await this.client
               .multi()
               .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
@@ -468,20 +549,29 @@ export class RedisBroker {
 
     // Check for idle client streams and clean them up
     const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
+    // TODO: this can use `XINFO STREAM key [FULL [COUNT 1]]` to also get the groups and consumers atomicly in
+    // a single call. It's not supported in the redis library yet, so it needs manual parsing.
     const clientStreamResponse = await Promise.all(
       clientStreamKeys.flatMap(key => [
         this.client.xInfoConsumers(key, this.CLIENT_GROUP_NAME).catch((error: unknown) => {
-          if ((error as Error).message.includes('NOGROUP')) {
+          if (
+            (error as Error).message?.includes('ERR no such key') ||
+            (error as Error).message?.includes('NOGROUP')
+          ) {
             return [];
           } else {
-            this.logger.error(
-              error as Error,
-              `Error performing xInfoConsumers consumers for ${key}`
-            );
+            this.logger.error(error as Error, `Error performing xInfoConsumers for ${key}`);
             throw error;
           }
         }),
-        this.client.xInfoGroups(key),
+        this.client.xInfoGroups(key).catch((error: unknown) => {
+          if ((error as Error).message?.includes('ERR no such key')) {
+            return [];
+          } else {
+            this.logger.error(error as Error, `Error performing xInfoGroups for ${key}`);
+            throw error;
+          }
+        }),
       ])
     );
     const clientStreamInfo = clientStreamKeys.map((clientStreamKey, i) => ({
@@ -490,9 +580,10 @@ export class RedisBroker {
       groups: clientStreamResponse[i * 2 + 1] as XInfoGroupsResponse,
     }));
     for (const { clientStreamKey, consumers, groups } of clientStreamInfo) {
-      if (consumers.length === 0) {
+      if (consumers.length === 0 || groups.length === 0) {
         // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
+        // TODO: this could just be a DEL because it will also destroy the group
         await this.client
           .multi()
           .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
@@ -528,6 +619,7 @@ export class RedisBroker {
           // Destroy the client stream group and delete the client stream
           if (await this.client.exists(clientStreamKey)) {
             this.logger.info(`Pruning idle client stream ${clientStreamKey}`);
+            // TODO: this could just be a DEL because it will also destroy the group
             await this.client
               .multi()
               .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)

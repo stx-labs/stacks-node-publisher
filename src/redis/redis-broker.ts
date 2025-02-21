@@ -393,18 +393,13 @@ export class RedisBroker {
       } catch (error) {
         if ((error as Error).message.includes('NOGROUP')) {
           this.logger.warn(error as Error, `Consumer group not found for client ${clientId}`);
-          // Destroy the global stream consumer group for this client
-          await client.xGroupDestroy(this.globalStreamKey, groupKey);
-          if (await client.exists(clientStreamKey)) {
-            // TODO: this could just be a DEL because it will also destroy the group
-            await client
-              .multi()
-              // Destroy the stream group for this client (notifies the client via NOGROUP error on xReadGroup)
-              .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
-              // Delete the redis stream for this client
-              .del(clientStreamKey)
-              .exec();
-          }
+          await client
+            .multi()
+            // Destroy the global stream consumer group for this client
+            .xGroupDestroy(this.globalStreamKey, groupKey)
+            // Destroy the stream for this client (notifies the client via NOGROUP error on xReadGroup)
+            .del(clientStreamKey)
+            .exec();
           break;
         } else {
           this.logger.error(
@@ -525,24 +520,19 @@ export class RedisBroker {
         const isTooSlow = msgsBehind > MAX_MSG_LAG;
         if (isIdle || isTooSlow) {
           const clientId = consumer.name.split(':').at(-1) ?? '';
+          const clientStreamKey = this.getClientStreamKey(clientId);
           this.logger.info(
             `Detected idle or slow consumer group, client: ${clientId}, idle ms: ${consumer.idle}, msgs behind: ${msgsBehind}`
           );
-          // When the group is destroyed here, the live-streaming loop for this client is notified
-          // via NOGROUP error on xReadGroup and exits.
-          await this.client.xGroupDestroy(this.globalStreamKey, group.name);
-
-          // Destroy the client stream group and delete the client stream, if there's still an online client then
-          // they will be notified via NOGROUP error on xReadGroup and re-init.
-          const clientStreamKey = this.getClientStreamKey(clientId);
-          if (await this.client.exists(clientStreamKey)) {
-            // TODO: this could just be a DEL because it will also destroy the group
-            await this.client
-              .multi()
-              .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
-              .del(clientStreamKey)
-              .exec();
-          }
+          await this.client
+            .multi()
+            // When the group is destroyed here, the live-streaming loop for this client is notified
+            // via NOGROUP error on xReadGroup and exits.
+            .xGroupDestroy(this.globalStreamKey, group.name)
+            // Destroy the client stream, if there's still an online client then
+            // they will be notified via NOGROUP error on xReadGroup and re-init.
+            .del(clientStreamKey)
+            .exec();
         }
       }
     }
@@ -583,12 +573,7 @@ export class RedisBroker {
       if (consumers.length === 0 || groups.length === 0) {
         // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
-        // TODO: this could just be a DEL because it will also destroy the group
-        await this.client
-          .multi()
-          .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
-          .del(clientStreamKey)
-          .exec();
+        await this.client.del(clientStreamKey);
       }
       if (consumers.length > 1) {
         this.logger.error(
@@ -614,20 +599,13 @@ export class RedisBroker {
           this.logger.info(
             `Detected idle client stream ${clientId}, idle ms: ${consumer.idle}, msgs behind: global=${globalStreamMsgsBehind}, client=${clientStreamMsgsBehind}`
           );
-          // Destroy the global stream consumer group for this client
-          await this.client.xGroupDestroy(this.globalStreamKey, groupId);
-          // Destroy the client stream group and delete the client stream
-          if (await this.client.exists(clientStreamKey)) {
-            this.logger.info(`Pruning idle client stream ${clientStreamKey}`);
-            // TODO: this could just be a DEL because it will also destroy the group
-            await this.client
-              .multi()
-              .xGroupDestroy(clientStreamKey, this.CLIENT_GROUP_NAME)
-              .del(clientStreamKey)
-              .exec();
-          } else {
-            this.logger.warn(`Unexpected client stream ${clientStreamKey} does not exist`);
-          }
+          await this.client
+            .multi()
+            // Destroy the global stream consumer group for this client
+            .xGroupDestroy(this.globalStreamKey, groupId)
+            // Destroy the client stream group and delete the client stream
+            .del(clientStreamKey)
+            .exec();
         }
       }
     }

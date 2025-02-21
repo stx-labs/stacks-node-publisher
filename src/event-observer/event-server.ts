@@ -4,7 +4,11 @@ import { AddressInfo } from 'node:net';
 import { Counter, Histogram, Registry, Summary } from 'prom-client';
 import PQueue from 'p-queue';
 
-export type EventMessageHandler = (eventPath: string, eventBody: string) => Promise<void>;
+export type EventMessageHandler = (
+  eventPath: string,
+  eventBody: string,
+  httpReceiveTimestamp: Date
+) => Promise<void>;
 
 export class EventObserverServer {
   readonly server: Server;
@@ -87,6 +91,10 @@ export class EventObserverServer {
     const startTime = process.hrtime(); // Start time for duration tracking
     const url = new URL(req.url as string, `http://${req.headers.host}`);
 
+    const httpReceiveTimestamp = new Date(
+      (req.headers['x-original-timestamp'] as string) ?? Date.now()
+    );
+
     if (req.method === 'GET' && /^\/(?:status\/?)?$/.test(url.pathname)) {
       const status = {
         server_version: `salt-n-pepper ${SERVER_VERSION.tag} (${SERVER_VERSION.branch}:${SERVER_VERSION.commit})`,
@@ -156,7 +164,7 @@ export class EventObserverServer {
       // Body has been fully received
       void this.queue.add(async () => {
         try {
-          await this.eventMessageHandler(eventPath, body);
+          await this.eventMessageHandler(eventPath, body, httpReceiveTimestamp);
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end('Received successfully!');
           logResponse(200);

@@ -39,10 +39,10 @@ async function initApp() {
   // Setup stacks-node http event observer http server
   const eventServer = new EventObserverServer({
     promRegistry,
-    eventMessageHandler: async (eventPath, eventBody) => {
+    eventMessageHandler: async (eventPath, eventBody, httpReceiveTimestamp) => {
       // Storing the event in postgres in critical, if this fails then throw so the observer server
       // returns a non-200 and the stacks-node will retry the event POST.
-      const dbResult = await db.insertMessage(eventPath, eventBody);
+      const dbResult = await db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
       // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
       // to redis is not critical and we don't want to slow down the event observer server & pg writes.
       // For now, if this fails then we throw.

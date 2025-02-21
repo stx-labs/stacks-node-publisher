@@ -63,12 +63,13 @@ export class PgStore extends BasePgStore {
 
   public async insertMessage(
     eventPath: string,
-    content: string
+    content: string,
+    httpReceiveTimestamp: Date
   ): Promise<{ sequence_number: string; timestamp: string }> {
     const insertQuery = await this.sql<{ sequence_number: string; timestamp: string }[]>`
-      INSERT INTO messages (path, content)
-      VALUES (${eventPath}, ${content}::jsonb)
-      RETURNING sequence_number, EXTRACT(EPOCH FROM created_at)::BIGINT AS timestamp
+      INSERT INTO messages (created_at, path, content)
+      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${content}::jsonb)
+      RETURNING sequence_number, (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp
     `;
     if (insertQuery.length !== 1) {
       throw new Error('Expected a single row to be returned');

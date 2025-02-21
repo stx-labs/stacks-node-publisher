@@ -192,7 +192,6 @@ export class RedisBroker {
     clientId: string,
     lastMessageId: string
   ) {
-    // TODO: do duplicated clients also need error event listeners so that the connection-retry works correctly?
     await client.connect();
 
     const DB_MSG_BATCH_SIZE = 100;

@@ -73,96 +73,103 @@ export class StacksEventStream {
 
   start(callback: StreamedStacksEventCallback) {
     this.logger.info('Starting event stream ingestion');
-    this.ingestEventStream(callback)
+    const runIngest = async () => {
+      while (!this.abort.signal.aborted) {
+        try {
+          await this.ingestEventStream(callback);
+        } catch (error: unknown) {
+          if (this.abort.signal.aborted) {
+            this.logger.info('Event stream ingestion aborted');
+            break;
+          } else if ((error as Error).message?.includes('NOGROUP')) {
+            // The redis stream doesn't exist. This can happen if the redis server was restarted,
+            // or if the client is idle/offline, or if the client is processing messages too slowly.
+            // If this code path is reached, then we're obviously online so we just need to re-initialize
+            // the connection.
+            this.logger.error(
+              error as Error,
+              `The redis stream group for this client was destroyed by the server`
+            );
+            // re-announce connection, re-create group, etc
+            continue;
+          } else {
+            // TODO: what are other expected errors and how should we handle them? For now we just retry
+            // forever.
+            this.logger.error(error as Error, 'Error reading or acknowledging from stream');
+            this.logger.info('Reconnecting to redis stream in 1 second...');
+            await timeout(1000);
+            continue;
+          }
+        }
+      }
+    };
+    void runIngest()
       .then(() => {
         this.streamWaiter.finish();
       })
       .catch((err: unknown) => {
-        this.logger.error(err as Error, 'event stream error');
+        this.logger.error(err as Error, 'event ingestion stream error');
       });
   }
 
   private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
-    try {
-      // Reset clientId for each new connection, this prevents race-conditions around cleanup
-      // for any previous connections.
-      this.clientId = randomUUID();
-      this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
-      const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
+    // Reset clientId for each new connection, this prevents race-conditions around cleanup
+    // for any previous connections.
+    this.clientId = randomUUID();
+    this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
+    const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
 
-      const handshakeMsg = {
-        client_id: this.clientId,
-        last_message_id: this.lastMessageId,
-      };
+    const handshakeMsg = {
+      client_id: this.clientId,
+      last_message_id: this.lastMessageId,
+    };
 
-      await this.client
-        .multi()
-        // Announce connection
-        .xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg)
-        // Create group for this stream
-        .xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
-          MKSTREAM: true,
-        })
-        .exec();
+    await this.client
+      .multi()
+      // Announce connection
+      .xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg)
+      // Create group for this stream
+      .xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
+        MKSTREAM: true,
+      })
+      .exec();
 
-      while (!this.abort.signal.aborted) {
-        // Because we specify the lastMessageId during the announce handshake and the above
-        // xGroupCreate, use '>' here to get the next messages.
-        const results = await this.client.xReadGroup(
-          this.GROUP_NAME,
-          this.CONSUMER_NAME,
-          {
-            key: streamKey,
-            id: '>',
-          },
-          {
-            COUNT: this.MSG_BATCH_SIZE,
-            BLOCK: 1000, // Wait 1 second for new events.
-          }
-        );
-        if (!results || results.length === 0) {
-          continue;
+    while (!this.abort.signal.aborted) {
+      // Because we specify the lastMessageId during the announce handshake and the above
+      // xGroupCreate, use '>' here to get the next messages.
+      const results = await this.client.xReadGroup(
+        this.GROUP_NAME,
+        this.CONSUMER_NAME,
+        {
+          key: streamKey,
+          id: '>',
+        },
+        {
+          COUNT: this.MSG_BATCH_SIZE,
+          BLOCK: 1000, // Wait 1 second for new events.
         }
-        for (const stream of results) {
-          for (const item of stream.messages) {
-            await eventCallback(
-              item.id,
-              item.message.timestamp,
-              item.message.path,
-              JSON.parse(item.message.body)
-            );
-            this.lastMessageId = item.id;
-
-            await this.client
-              .multi()
-              // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
-              .xAck(streamKey, this.GROUP_NAME, item.id)
-              // Delete the message from the stream so that it doesn't get reprocessed
-              .xDel(streamKey, item.id)
-              .exec();
-          }
-        }
+      );
+      if (!results || results.length === 0) {
+        continue;
       }
-    } catch (error: unknown) {
-      if ((error as Error).message.includes('NOGROUP')) {
-        // The redis stream doesn't exist. This can happen if the redis server was restarted,
-        // or if the client is idle/offline, or if the client is processing messages too slowly.
-        // If this code path is reached, then we're obviously online so we just need to re-initialize
-        // the connection.
-        this.logger.error(
-          error as Error,
-          `The redis stream group for this client was destroyed by the server`
-        );
-        // re-announce connection, re-create group, etc
-        await this.ingestEventStream(eventCallback);
-        return;
-      } else {
-        // TODO: what are other expected errors and how should we handle them?
-        this.logger.error(error as Error, 'Error reading or acknowledging from stream');
-        this.logger.info('Reconnecting to redis stream');
-        await timeout(1000);
-        await this.ingestEventStream(eventCallback);
-        return;
+      for (const stream of results) {
+        for (const item of stream.messages) {
+          await eventCallback(
+            item.id,
+            item.message.timestamp,
+            item.message.path,
+            JSON.parse(item.message.body)
+          );
+          this.lastMessageId = item.id;
+
+          await this.client
+            .multi()
+            // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
+            .xAck(streamKey, this.GROUP_NAME, item.id)
+            // Delete the message from the stream so that it doesn't get reprocessed
+            .xDel(streamKey, item.id)
+            .exec();
+        }
       }
     }
   }

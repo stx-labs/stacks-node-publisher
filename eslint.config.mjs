@@ -46,7 +46,7 @@ export default tseslint.config(
         { ignoreArrowShorthand: true, ignoreVoidOperator: true },
       ],
       '@typescript-eslint/no-empty-function': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         {

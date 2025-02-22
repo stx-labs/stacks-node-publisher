@@ -129,6 +129,26 @@ describe('Endpoint tests', () => {
     await appRedisClient.quit();
   });
 
+  /* Robustness test scenarios:
+   *  - Multiple clients started at the same time with the same lastMessageId
+   *  - Multiple clients started at the same time with different lastMessageIds
+   *  - Client stalls for MAX_IDLE during pg backfill
+   *  - Client stalls for MAX_IDLE during redis live-streaming
+   *  - Client activity is within MAX_IDLE but exceeds MAX_MSG_LAG threshold during pg backfill
+   *  - Client activity is within MAX_IDLE but exceeds MAX_MSG_LAG threshold during redis live-streaming
+   *  - Client redis network connection is killed during pg backfill
+   *  - Client redis network connection is killed during redis live-streaming
+   *  - Server redis connection for client is killed during pg backfill
+   *  - Server redis connection for client is killed during redis live-streaming
+   *  - Server global redis connection is killed during pg backfill
+   *  - Server global redis connection is killed during redis live-streaming
+   *  - Redis server data is wiped (redis-cli flushall) during pg backfill
+   *  - Redis server data is wiped (redis-cli flushall) during redis live-streaming
+   *  - Redis ingestion client connection is killed and unavailable right after pg insertion
+   *  - Redis server data is wiped (redis-cli flushall) right after pg insertion
+   *  - Msg added to pg exactly in the middle of client transition from backfilling to live-streaming
+   */
+
   test('client lib test', async () => {
     redisBroker.testRegisterOnLiveStreamTransition(async () => {
       for (let i = 0; i < 10; i++) {

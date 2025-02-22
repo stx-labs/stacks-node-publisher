@@ -21,6 +21,7 @@ export class StacksEventStream {
   private clientId = randomUUID();
   private lastMessageId: string;
   private readonly redisStreamPrefix: string;
+  private readonly appName: string;
 
   private readonly abort: AbortController;
   private readonly streamWaiter: Waiter<void>;
@@ -36,6 +37,7 @@ export class StacksEventStream {
     eventStreamType: StacksEventStreamType;
     lastMessageId?: string;
     redisStreamPrefix?: string;
+    appName: string;
   }) {
     this.client = createClient({ url: args.redisUrl });
     this.eventStreamType = args.eventStreamType;
@@ -43,6 +45,7 @@ export class StacksEventStream {
     this.abort = new AbortController();
     this.streamWaiter = waiter();
     this.redisStreamPrefix = args.redisStreamPrefix ?? '';
+    this.appName = args.appName;
 
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
@@ -122,6 +125,7 @@ export class StacksEventStream {
     const handshakeMsg = {
       client_id: this.clientId,
       last_message_id: this.lastMessageId,
+      app_name: this.appName,
     };
 
     await this.client

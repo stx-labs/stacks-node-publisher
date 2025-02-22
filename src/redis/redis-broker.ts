@@ -1,5 +1,5 @@
 import { createClient } from 'redis';
-import { logger as defaultLogger, timeout } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
@@ -38,7 +38,7 @@ export class RedisBroker {
     this.db = args.db;
     this.client = createClient({
       url: args.redisUrl,
-      name: 'salt-n-pepper-server',
+      name: 'snp-primary-client',
     });
     this.redisStreamKeyPrefix = args.redisStreamKeyPrefix;
     this.globalStreamKey = args.redisStreamKeyPrefix + 'global_stream';
@@ -209,17 +209,17 @@ export class RedisBroker {
     const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
     while (!this.abortController.signal.aborted) {
       // TODO: if client.quit() is called, will throw an error? if so handle gracefully
-      const connections = await listeningClient.xRead(
+      const connectionRequests = await listeningClient.xRead(
         { key: connectionStreamKey, id: '0-0' },
         {
           BLOCK: 1000, // wait for 1 second for new messages to allow abort signal to be checked
         }
       );
-      if (!connections || connections.length === 0) {
+      if (!connectionRequests || connectionRequests.length === 0) {
         continue;
       }
-      for (const connection of connections) {
-        for (const msg of connection.messages) {
+      for (const request of connectionRequests) {
+        for (const msg of request.messages) {
           const msgId = msg.id;
           const msgPayload = msg.message;
 
@@ -228,27 +228,27 @@ export class RedisBroker {
 
           const clientId = msgPayload['client_id'];
           const lastMessageId = msgPayload['last_message_id'];
-          this.logger.info(`New client connection: ${clientId}, lastMessageId: ${lastMessageId})`);
+          const appName = msgPayload['app_name'];
+          this.logger.info(
+            `New client connection: ${clientId}, app: ${appName}, lastMessageId: ${lastMessageId})`
+          );
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
-          const dedicatedClient = this.client.duplicate();
-          dedicatedClient.on('error', (err: Error) => {
-            this.logger.error(
-              err,
-              `Redis error on dedicated client connection for client ${clientId}`
-            );
+          const logger = this.logger.child({ clientId, appName });
+          const dedicatedClient = this.client.duplicate({
+            name: `snp-producer:${appName}:${clientId}`,
           });
-          void this.handleClientConnection(dedicatedClient, clientId, lastMessageId)
+          dedicatedClient.on('error', (err: Error) => {
+            logger.error(err, `Redis error on dedicated client connection for client`);
+          });
+          void this.handleClientConnection(dedicatedClient, clientId, lastMessageId, logger)
             .catch((error: unknown) => {
-              this.logger.error(error as Error, `Error handling client connection for ${clientId}`);
+              logger.error(error as Error, `Error handling client connection`);
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
               dedicatedClient.quit().catch((error: unknown) => {
-                this.logger.error(
-                  error as Error,
-                  `Error closing dedicated client connection for ${clientId}`
-                );
+                logger.error(error as Error, `Error closing dedicated client connection`);
               });
             });
         }
@@ -267,7 +267,8 @@ export class RedisBroker {
   async handleClientConnection(
     client: typeof this.client,
     clientId: string,
-    lastMessageId: string
+    lastMessageId: string,
+    logger: typeof this.logger
   ) {
     await client.connect();
 
@@ -300,12 +301,11 @@ export class RedisBroker {
       .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
       .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)
       .exec();
-    this.logger.info(`Consumer group ${groupKey} created for client ${clientId}.`);
+    logger.info(`Consumer group created on global stream for client`);
 
     // Next, we need to backfill the redis stream with messages from postgres.
     // NOTE: do not perform the backfilling within a sql transaction because it will use up a connection
     // from the pool for the duration of the backfilling, which could be a long time for large backfills.
-    let lastMsgId = '0-0';
     let lastQueriedSequenceNumber = lastMessageId.split('-')[0];
     while (!this.abortController.signal.aborted) {
       const dbResults = await this.db.sql<
@@ -321,48 +321,56 @@ export class RedisBroker {
         ORDER BY sequence_number ASC
         LIMIT ${DB_MSG_BATCH_SIZE}
       `;
-      const msgsQueried = dbResults.length;
 
-      if (msgsQueried > 0) {
+      if (dbResults.length > 0) {
         lastQueriedSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
-        this.logger.debug(
-          `Queried ${msgsQueried} messages from postgres for client ${clientId} (messages ${dbResults[0].sequence_number} to ${lastQueriedSequenceNumber})`
+        logger.debug(
+          `Queried ${dbResults.length} messages from postgres for client (messages ${dbResults[0].sequence_number} to ${lastQueriedSequenceNumber})`
         );
+        // Update the global stream group to the last message ID so it's not holding onto messages
+        // that are already backfilled, using XGROUP SETID.
+        // TODO: this can throw NOGROUP error if the group is destroyed, handle that gracefully
+        await client
+          .xGroupSetId(this.globalStreamKey, groupKey, `${lastQueriedSequenceNumber}-0`)
+          .catch((error: unknown) => {
+            logger.error(error as Error, `Error setting last message ID for group`);
+            throw error;
+          });
       } else {
-        this.logger.debug(`Finished backfilling messages from postgres for client ${clientId}`);
+        logger.debug(`Finished backfilling messages from postgres to client stream`);
         break;
       }
 
-      for (const row of dbResults) {
-        // TODO: this can be optimized with redis pipelining:
-        // https://github.com/redis/node-redis/tree/master/packages/redis#auto-pipelining
-        const messageId = `${row.sequence_number}-0`;
-        const redisMsg = {
-          timestamp: row.timestamp,
-          path: row.path,
-          body: row.content,
-        };
-        await client.xAdd(clientStreamKey, messageId, redisMsg);
-        lastMsgId = messageId;
-      }
-
-      // Update the global stream group to the last message ID so it's not holding onto messages
-      // that are already backfilled, using XGROUP SETID.
-      // TODO: this can throw NOGROUP error if the group is destroyed, handle that gracefully
-      await client
-        .xGroupSetId(this.globalStreamKey, groupKey, lastMsgId)
-        .catch((error: unknown) => {
-          console.error(error);
-          throw error;
-        });
+      // xAdd all msgs at once with redis pipelining, see:
+      // https://github.com/redis/node-redis/tree/master/packages/redis#auto-pipelining
+      await Promise.all(
+        dbResults.map(row => {
+          const messageId = `${row.sequence_number}-0`;
+          const redisMsg = {
+            timestamp: row.timestamp,
+            path: row.path,
+            body: row.content,
+          };
+          return client.xAdd(clientStreamKey, messageId, redisMsg);
+        })
+      );
 
       // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
       // is below a certain threshold before continuing.
-      while (
-        !this.abortController.signal.aborted &&
-        (await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN
-      ) {
-        await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+      const timer = stopwatch();
+      while (!this.abortController.signal.aborted) {
+        const clientStreamLen = await client.xLen(clientStreamKey);
+        if (clientStreamLen <= CLIENT_REDIS_STREAM_MAX_LEN) {
+          break;
+        } else {
+          await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+          if (timer.getElapsedSeconds() > 5) {
+            logger.debug(
+              `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while backfilling...`
+            );
+            timer.restart();
+          }
+        }
       }
     }
 
@@ -373,7 +381,7 @@ export class RedisBroker {
 
     // Now we can start streaming live messages from the global redis stream to the client redis stream.
     // Read from the global stream using the consumer group we created above, and write to the client's stream.
-    this.logger.debug(`Starting live streaming for client ${clientId} from ID ${lastMsgId}`);
+    logger.info(`Starting live streaming for client at msg ID ${lastQueriedSequenceNumber}`);
 
     while (!this.abortController.signal.aborted) {
       let messages: XReadGroupResponse;
@@ -392,7 +400,7 @@ export class RedisBroker {
         );
       } catch (error) {
         if ((error as Error).message.includes('NOGROUP')) {
-          this.logger.warn(error as Error, `Consumer group not found for client ${clientId}`);
+          logger.warn(error as Error, `Consumer group not found for client`);
           await client
             .multi()
             // Destroy the global stream consumer group for this client
@@ -402,10 +410,7 @@ export class RedisBroker {
             .exec();
           break;
         } else {
-          this.logger.error(
-            error as Error,
-            `Error reading from global stream for client ${clientId}`
-          );
+          logger.error(error as Error, `Error reading from global stream for client`);
           break;
         }
       }
@@ -416,28 +421,33 @@ export class RedisBroker {
         for (const stream of messages) {
           for (const msg of stream.messages) {
             const { id, message } = msg;
-
-            this.logger.debug(`Received message ${id} from global stream for client ${clientId}`);
-
-            // TODO: pipeline these xAdd and xAck calls
-
-            // Process message (send to client)
-            await client.xAdd(clientStreamKey, id, message);
-
-            // Acknowledge message for this consumer group
-            await client.xAck(this.globalStreamKey, groupKey, id);
-
-            lastMsgId = id;
+            logger.debug(`Received message ${id} from global stream`);
+            await client
+              .multi()
+              // Process message (send to client)
+              .xAdd(clientStreamKey, id, message)
+              // Acknowledge message for this consumer group
+              .xAck(this.globalStreamKey, groupKey, id)
+              .exec();
           }
         }
 
         // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
         // is below a certain threshold before continuing.
-        while (
-          !this.abortController.signal.aborted &&
-          (await client.xLen(clientStreamKey)) > CLIENT_REDIS_STREAM_MAX_LEN
-        ) {
-          await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+        const timer = stopwatch();
+        while (!this.abortController.signal.aborted) {
+          const clientStreamLen = await client.xLen(clientStreamKey);
+          if (clientStreamLen <= CLIENT_REDIS_STREAM_MAX_LEN) {
+            break;
+          } else {
+            await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+            if (timer.getElapsedSeconds() > 5) {
+              logger.debug(
+                `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while live-streaming...`
+              );
+              timer.restart();
+            }
+          }
         }
       } else {
         for (const cb of this.testRegisterOnLiveStreamTransitionCbs) {

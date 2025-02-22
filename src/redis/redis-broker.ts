@@ -500,6 +500,61 @@ export class RedisBroker {
     this.logger.info(`Trimmed global stream from length ${startLen} to ${endLen}`);
   }
 
+  parseXInfoStreamFull(result: unknown) {
+    const resp = result as unknown[];
+    return {
+      length: resp[1] as number,
+      radixTreeKeys: resp[3] as number,
+      radixTreeNodes: resp[5] as number,
+      lastGeneratedId: resp[7] as string | null,
+      maxDeletedEntryId: resp[9] as string | null,
+      entriesAdded: resp[11] as number,
+      recordedFirstEntryId: resp[13] as string | null,
+      entries: (resp[15] as unknown[][]).map((entry: unknown[]) => ({
+        id: entry[0] as string,
+        msg: entry[1],
+      })),
+      groups: (resp[17] as unknown[][]).map((group: unknown[]) => ({
+        name: group[1] as string,
+        lastDeliveredId: group[3] as string,
+        entriesRead: group[5] as number | null,
+        lag: group[7] as number | null,
+        pelCount: group[9] as number | null,
+        pending: group[11] as unknown[],
+        consumers: (group[13] as unknown[][]).map((c: unknown[]) => ({
+          name: c[1] as string,
+          seenTime: c[3] as number,
+          activeTime: c[5] as number,
+          pelCount: c[7] as number,
+          pending: c[9] as unknown[],
+        })),
+      })),
+    };
+  }
+
+  /** `XINFO STREAM key FULL COUNT 1` It's not supported in the redis library yet, so it needs manual parsing. */
+  xInfoStreamFull(client: typeof this.client, stream: string) {
+    const cmd = ['XINFO', 'STREAM', stream, 'FULL', 'COUNT', '1'];
+    return client.sendCommand(cmd).then(result => this.parseXInfoStreamFull(result));
+  }
+
+  async xInfoStreamsFull(client: typeof this.client, streams: string[]) {
+    const cmds = streams.map(stream => ['XINFO', 'STREAM', stream, 'FULL', 'COUNT', '1']);
+    return await Promise.all(
+      cmds.map(cmd =>
+        client
+          .sendCommand(cmd)
+          .catch((error: unknown) => {
+            if ((error as Error).message?.includes('ERR no such key')) {
+              return null;
+            }
+            throw error;
+          })
+          .then(result => (result ? this.parseXInfoStreamFull(result) : null))
+      )
+    );
+  }
+
   async pruneIdleClients() {
     // Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
     // up with the global stream, otherwise the global stream will continue to grow and OOM redis.
@@ -512,38 +567,30 @@ export class RedisBroker {
       MAX_MSG_LAG = 102;
     }
 
-    // TODO: this can use `XINFO STREAM key [FULL [COUNT 1]]` to also get the groups and consumers atomicly in
-    // a single call. It's not supported in the redis library yet, so it needs manual parsing.
-
-    const globalStreamInfo = await this.client.xInfoStream(this.globalStreamKey);
-    const lastEntryID = globalStreamInfo.lastEntry?.id
-      ? parseInt(globalStreamInfo.lastEntry.id.split('-')[0])
+    const fullStreamInfo = await this.xInfoStreamFull(this.client, this.globalStreamKey);
+    const lastEntryID = fullStreamInfo.lastGeneratedId
+      ? parseInt(fullStreamInfo.lastGeneratedId.split('-')[0])
       : null;
-    const globalGroups = await this.client.xInfoGroups(this.globalStreamKey);
-    const globalConsumers = await Promise.all(
-      globalGroups.map(group => this.client.xInfoConsumers(this.globalStreamKey, group.name))
-    );
-    const globalClients = globalGroups.map((group, i) => ({
-      group,
-      consumers: globalConsumers[i],
-    }));
-    for (const { group, consumers } of globalClients) {
-      if (consumers.length > 1) {
+
+    for (const group of fullStreamInfo.groups) {
+      if (group.consumers.length > 1) {
         this.logger.error(
-          `Multiple consumers for global stream group ${group.name}: ${consumers.length}`
+          `Multiple consumers for global stream group ${group.name}: ${group.consumers.length}`
         );
       }
-      for (const consumer of consumers) {
+      for (const consumer of group.consumers) {
+        // await this.xInfoStreamFull(this.client, this.globalStreamKey);
         const msgsBehind = lastEntryID
           ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
           : 0;
-        const isIdle = consumer.idle > MAX_IDLE_TIME;
+        const idleMs = Date.now() - consumer.seenTime;
+        const isIdle = idleMs > MAX_IDLE_TIME;
         const isTooSlow = msgsBehind > MAX_MSG_LAG;
         if (isIdle || isTooSlow) {
           const clientId = consumer.name.split(':').at(-1) ?? '';
           const clientStreamKey = this.getClientStreamKey(clientId);
           this.logger.info(
-            `Detected idle or slow consumer group, client: ${clientId}, idle ms: ${consumer.idle}, msgs behind: ${msgsBehind}`
+            `Detected idle or slow consumer group, client: ${clientId}, idle ms: ${idleMs}, msgs behind: ${msgsBehind}`
           );
           await this.client
             .multi()
@@ -564,77 +611,64 @@ export class RedisBroker {
 
     // Check for idle client streams and clean them up
     const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
-    // TODO: this can use `XINFO STREAM key [FULL [COUNT 1]]` to also get the groups and consumers atomicly in
-    // a single call. It's not supported in the redis library yet, so it needs manual parsing.
-    const clientStreamResponse = await Promise.all(
-      clientStreamKeys.flatMap(key => [
-        this.client.xInfoConsumers(key, this.CLIENT_GROUP_NAME).catch((error: unknown) => {
-          if (
-            (error as Error).message?.includes('ERR no such key') ||
-            (error as Error).message?.includes('NOGROUP')
-          ) {
-            return [];
-          } else {
-            this.logger.error(error as Error, `Error performing xInfoConsumers for ${key}`);
-            throw error;
-          }
-        }),
-        this.client.xInfoGroups(key).catch((error: unknown) => {
-          if ((error as Error).message?.includes('ERR no such key')) {
-            return [];
-          } else {
-            this.logger.error(error as Error, `Error performing xInfoGroups for ${key}`);
-            throw error;
-          }
-        }),
-      ])
-    );
-    const clientStreamInfo = clientStreamKeys.map((clientStreamKey, i) => ({
+    const clientStreamFullInfos = await this.xInfoStreamsFull(this.client, clientStreamKeys);
+    const clientStreamInfo = clientStreamKeys
+      .map((clientStreamKey, i) => ({
+        clientStreamKey,
+        info: clientStreamFullInfos[i],
+      }))
+      .filter(
+        (entry): entry is { clientStreamKey: string; info: NonNullable<typeof entry.info> } =>
+          entry.info !== null
+      );
+
+    for (const {
       clientStreamKey,
-      consumers: clientStreamResponse[i * 2] as XInfoConsumersResponse,
-      groups: clientStreamResponse[i * 2 + 1] as XInfoGroupsResponse,
-    }));
-    for (const { clientStreamKey, consumers, groups } of clientStreamInfo) {
-      if (consumers.length === 0 || groups.length === 0) {
+      info: { groups },
+    } of clientStreamInfo) {
+      if (groups.length === 0 || groups[0].consumers.length === 0) {
         // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
         await this.client.del(clientStreamKey);
       }
-      if (consumers.length > 1) {
-        this.logger.error(
-          `Multiple consumers for client stream ${clientStreamKey}: ${consumers.length}`
-        );
-      }
       if (groups.length > 1) {
         this.logger.error(`Multiple groups for client stream ${clientStreamKey}: ${groups.length}`);
       }
-      for (const consumer of consumers) {
-        if (consumer.idle > MAX_IDLE_TIME) {
-          const clientId = clientStreamKey.split(':').at(-1) ?? '';
-          const groupId = this.getClientGlobalStreamGroupKey(clientId);
-          const globalStreamGroup = globalGroups.find(g => g.name === groupId);
-          const globalStreamMsgsBehind =
-            lastEntryID && globalStreamGroup
-              ? lastEntryID - parseInt(globalStreamGroup.lastDeliveredId.split('-')[0])
-              : 0;
-          const clientStreamMsgsBehind = lastEntryID
-            ? lastEntryID - parseInt(groups[0].lastDeliveredId.split('-')[0])
-            : 0;
-
-          this.logger.info(
-            `Detected idle client stream ${clientId}, idle ms: ${consumer.idle}, msgs behind: global=${globalStreamMsgsBehind}, client=${clientStreamMsgsBehind}`
+      for (const group of groups) {
+        if (group.consumers.length > 1) {
+          this.logger.error(
+            `Multiple consumers for client stream ${clientStreamKey}: ${group.consumers.length}`
           );
-          await this.client
-            .multi()
-            // Destroy the global stream consumer group for this client
-            .xGroupDestroy(this.globalStreamKey, groupId)
-            // Destroy the client stream group and delete the client stream
-            .del(clientStreamKey)
-            .exec()
-            .catch((error: unknown) => {
-              error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
-              this.logger.warn(error, `Error while pruning idle client stream`);
-            });
+        }
+        for (const consumer of group.consumers) {
+          const idleMs = Date.now() - consumer.seenTime;
+          if (idleMs > MAX_IDLE_TIME) {
+            const clientId = clientStreamKey.split(':').at(-1) ?? '';
+            const groupId = this.getClientGlobalStreamGroupKey(clientId);
+            const globalStreamGroup = fullStreamInfo.groups.find(g => g.name === groupId);
+            const globalStreamMsgsBehind =
+              lastEntryID && globalStreamGroup
+                ? lastEntryID - parseInt(globalStreamGroup.lastDeliveredId.split('-')[0])
+                : 0;
+            const clientStreamMsgsBehind = lastEntryID
+              ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
+              : 0;
+
+            this.logger.info(
+              `Detected idle client stream ${clientId}, idle ms: ${idleMs}, msgs behind: global=${globalStreamMsgsBehind}, client=${clientStreamMsgsBehind}`
+            );
+            await this.client
+              .multi()
+              // Destroy the global stream consumer group for this client
+              .xGroupDestroy(this.globalStreamKey, groupId)
+              // Destroy the client stream group and delete the client stream
+              .del(clientStreamKey)
+              .exec()
+              .catch((error: unknown) => {
+                error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+                this.logger.warn(error, `Error while pruning idle client stream`);
+              });
+          }
         }
       }
     }

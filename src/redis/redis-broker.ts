@@ -1,9 +1,9 @@
-import { createClient } from 'redis';
+import { createClient, ErrorReply, MultiErrorReply } from 'redis';
 import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
-import { XInfoConsumersResponse, XInfoGroupsResponse, XReadGroupResponse } from './redis-types';
+import { XInfoConsumersResponse, XInfoGroupsResponse } from './redis-types';
 
 enum StreamType {
   ALL = 'all',
@@ -242,18 +242,47 @@ export class RedisBroker {
             logger.error(err, `Redis error on dedicated client connection for client`);
           });
           void this.handleClientConnection(dedicatedClient, clientId, lastMessageId, logger)
-            .catch((error: unknown) => {
-              logger.error(error as Error, `Error handling client connection`);
+            .catch(async (error: unknown) => {
+              error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+              if ((error as Error).message?.includes('NOGROUP')) {
+                logger.warn(error as Error, `Consumer group not found for client (likely pruned)`);
+                const groupKey = this.getClientGlobalStreamGroupKey(clientId);
+                const clientStreamKey = this.getClientStreamKey(clientId);
+                await this.client
+                  .multi()
+                  // Destroy the global stream consumer group for this client
+                  .xGroupDestroy(this.globalStreamKey, groupKey)
+                  // Destroy the stream for this client (notifies the client via NOGROUP error on xReadGroup)
+                  .del(clientStreamKey)
+                  .exec()
+                  .catch((error: unknown) => {
+                    error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+                    logger.warn(error, `Error cleaning up client connection`);
+                  });
+              } else {
+                logger.error(error as Error, `Error reading from global stream for client`);
+              }
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
               dedicatedClient.quit().catch((error: unknown) => {
-                logger.error(error as Error, `Error closing dedicated client connection`);
+                logger.warn(error as Error, `Error closing dedicated client connection`);
               });
             });
         }
       }
     }
+  }
+
+  /** If the error is a MultiErrorReply instance with 1 entry, extract and return that, otherwise return null */
+  unwrapRedisMultiErrorReply(error: Error) {
+    if (error instanceof MultiErrorReply) {
+      const innerErrors = [...error.errors()];
+      if (innerErrors.length === 1 && innerErrors[0] instanceof ErrorReply) {
+        return innerErrors[0];
+      }
+    }
+    return null;
   }
 
   getClientStreamKey(clientId: string) {
@@ -384,36 +413,18 @@ export class RedisBroker {
     logger.info(`Starting live streaming for client at msg ID ${lastQueriedSequenceNumber}`);
 
     while (!this.abortController.signal.aborted) {
-      let messages: XReadGroupResponse;
-      try {
-        messages = await client.xReadGroup(
-          groupKey,
-          consumerKey,
-          {
-            key: this.globalStreamKey,
-            id: '>',
-          },
-          {
-            COUNT: LIVE_STREAM_BATCH_SIZE,
-            BLOCK: 1000,
-          }
-        );
-      } catch (error) {
-        if ((error as Error).message.includes('NOGROUP')) {
-          logger.warn(error as Error, `Consumer group not found for client`);
-          await client
-            .multi()
-            // Destroy the global stream consumer group for this client
-            .xGroupDestroy(this.globalStreamKey, groupKey)
-            // Destroy the stream for this client (notifies the client via NOGROUP error on xReadGroup)
-            .del(clientStreamKey)
-            .exec();
-          break;
-        } else {
-          logger.error(error as Error, `Error reading from global stream for client`);
-          break;
+      const messages = await client.xReadGroup(
+        groupKey,
+        consumerKey,
+        {
+          key: this.globalStreamKey,
+          id: '>',
+        },
+        {
+          COUNT: LIVE_STREAM_BATCH_SIZE,
+          BLOCK: 1000,
         }
-      }
+      );
 
       if (messages) {
         // TODO: this can be optimized with redis pipelining:
@@ -542,7 +553,11 @@ export class RedisBroker {
             // Destroy the client stream, if there's still an online client then
             // they will be notified via NOGROUP error on xReadGroup and re-init.
             .del(clientStreamKey)
-            .exec();
+            .exec()
+            .catch((error: unknown) => {
+              error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+              this.logger.warn(error, `Error while pruning idle client groups`);
+            });
         }
       }
     }
@@ -615,7 +630,11 @@ export class RedisBroker {
             .xGroupDestroy(this.globalStreamKey, groupId)
             // Destroy the client stream group and delete the client stream
             .del(clientStreamKey)
-            .exec();
+            .exec()
+            .catch((error: unknown) => {
+              error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+              this.logger.warn(error, `Error while pruning idle client stream`);
+            });
         }
       }
     }

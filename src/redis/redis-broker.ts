@@ -1,17 +1,18 @@
-import { createClient, ErrorReply, MultiErrorReply } from 'redis';
+import { createClient } from 'redis';
 import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
-import { XInfoConsumersResponse, XInfoGroupsResponse } from './redis-types';
+import type { RedisClient } from './redis-types';
+import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 
 enum StreamType {
   ALL = 'all',
 }
 
 export class RedisBroker {
-  client: ReturnType<typeof createClient>;
-  ingestionClient: ReturnType<typeof createClient>;
+  client: RedisClient;
+  ingestionClient: RedisClient;
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
   readonly redisStreamKeyPrefix: string;
@@ -19,8 +20,6 @@ export class RedisBroker {
 
   readonly abortController = new AbortController();
   readonly db: PgStore;
-
-  private readonly CLIENT_GROUP_NAME = 'primary_group';
 
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
   testRegisterOnLiveStreamTransition(cb: () => Promise<void>) {
@@ -205,7 +204,7 @@ export class RedisBroker {
     await this.pruneIdleClients();
   }
 
-  async listenForConnections(listeningClient: typeof this.client) {
+  async listenForConnections(listeningClient: RedisClient) {
     const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
     while (!this.abortController.signal.aborted) {
       // TODO: if client.quit() is called, will throw an error? if so handle gracefully
@@ -243,7 +242,7 @@ export class RedisBroker {
           });
           void this.handleClientConnection(dedicatedClient, clientId, lastMessageId, logger)
             .catch(async (error: unknown) => {
-              error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+              error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               if ((error as Error).message?.includes('NOGROUP')) {
                 logger.warn(error as Error, `Consumer group not found for client (likely pruned)`);
                 const groupKey = this.getClientGlobalStreamGroupKey(clientId);
@@ -256,7 +255,7 @@ export class RedisBroker {
                   .del(clientStreamKey)
                   .exec()
                   .catch((error: unknown) => {
-                    error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+                    error = unwrapRedisMultiErrorReply(error as Error) ?? error;
                     logger.warn(error, `Error cleaning up client connection`);
                   });
               } else {
@@ -272,17 +271,6 @@ export class RedisBroker {
         }
       }
     }
-  }
-
-  /** If the error is a MultiErrorReply instance with 1 entry, extract and return that, otherwise return null */
-  unwrapRedisMultiErrorReply(error: Error) {
-    if (error instanceof MultiErrorReply) {
-      const innerErrors = [...error.errors()];
-      if (innerErrors.length === 1 && innerErrors[0] instanceof ErrorReply) {
-        return innerErrors[0];
-      }
-    }
-    return null;
   }
 
   getClientStreamKey(clientId: string) {
@@ -500,61 +488,6 @@ export class RedisBroker {
     this.logger.info(`Trimmed global stream from length ${startLen} to ${endLen}`);
   }
 
-  parseXInfoStreamFull(result: unknown) {
-    const resp = result as unknown[];
-    return {
-      length: resp[1] as number,
-      radixTreeKeys: resp[3] as number,
-      radixTreeNodes: resp[5] as number,
-      lastGeneratedId: resp[7] as string | null,
-      maxDeletedEntryId: resp[9] as string | null,
-      entriesAdded: resp[11] as number,
-      recordedFirstEntryId: resp[13] as string | null,
-      entries: (resp[15] as unknown[][]).map((entry: unknown[]) => ({
-        id: entry[0] as string,
-        msg: entry[1],
-      })),
-      groups: (resp[17] as unknown[][]).map((group: unknown[]) => ({
-        name: group[1] as string,
-        lastDeliveredId: group[3] as string,
-        entriesRead: group[5] as number | null,
-        lag: group[7] as number | null,
-        pelCount: group[9] as number | null,
-        pending: group[11] as unknown[],
-        consumers: (group[13] as unknown[][]).map((c: unknown[]) => ({
-          name: c[1] as string,
-          seenTime: c[3] as number,
-          activeTime: c[5] as number,
-          pelCount: c[7] as number,
-          pending: c[9] as unknown[],
-        })),
-      })),
-    };
-  }
-
-  /** `XINFO STREAM key FULL COUNT 1` It's not supported in the redis library yet, so it needs manual parsing. */
-  xInfoStreamFull(client: typeof this.client, stream: string) {
-    const cmd = ['XINFO', 'STREAM', stream, 'FULL', 'COUNT', '1'];
-    return client.sendCommand(cmd).then(result => this.parseXInfoStreamFull(result));
-  }
-
-  async xInfoStreamsFull(client: typeof this.client, streams: string[]) {
-    const cmds = streams.map(stream => ['XINFO', 'STREAM', stream, 'FULL', 'COUNT', '1']);
-    return await Promise.all(
-      cmds.map(cmd =>
-        client
-          .sendCommand(cmd)
-          .catch((error: unknown) => {
-            if ((error as Error).message?.includes('ERR no such key')) {
-              return null;
-            }
-            throw error;
-          })
-          .then(result => (result ? this.parseXInfoStreamFull(result) : null))
-      )
-    );
-  }
-
   async pruneIdleClients() {
     // Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
     // up with the global stream, otherwise the global stream will continue to grow and OOM redis.
@@ -567,7 +500,7 @@ export class RedisBroker {
       MAX_MSG_LAG = 102;
     }
 
-    const fullStreamInfo = await this.xInfoStreamFull(this.client, this.globalStreamKey);
+    const fullStreamInfo = await xInfoStreamFull(this.client, this.globalStreamKey);
     const lastEntryID = fullStreamInfo.lastGeneratedId
       ? parseInt(fullStreamInfo.lastGeneratedId.split('-')[0])
       : null;
@@ -579,7 +512,6 @@ export class RedisBroker {
         );
       }
       for (const consumer of group.consumers) {
-        // await this.xInfoStreamFull(this.client, this.globalStreamKey);
         const msgsBehind = lastEntryID
           ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
           : 0;
@@ -602,7 +534,7 @@ export class RedisBroker {
             .del(clientStreamKey)
             .exec()
             .catch((error: unknown) => {
-              error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+              error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               this.logger.warn(error, `Error while pruning idle client groups`);
             });
         }
@@ -611,21 +543,19 @@ export class RedisBroker {
 
     // Check for idle client streams and clean them up
     const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
-    const clientStreamFullInfos = await this.xInfoStreamsFull(this.client, clientStreamKeys);
-    const clientStreamInfo = clientStreamKeys
-      .map((clientStreamKey, i) => ({
-        clientStreamKey,
-        info: clientStreamFullInfos[i],
-      }))
-      .filter(
-        (entry): entry is { clientStreamKey: string; info: NonNullable<typeof entry.info> } =>
-          entry.info !== null
-      );
+    const clientStreamFullInfos = await xInfoStreamsFull(this.client, clientStreamKeys);
 
-    for (const {
-      clientStreamKey,
-      info: { groups },
-    } of clientStreamInfo) {
+    for (const streamInfo of clientStreamFullInfos) {
+      if (!streamInfo.response) {
+        // no stream exists for this key (i.e. stream was deleted in between fetching the list of keys then info)
+        continue;
+      }
+
+      const {
+        stream: clientStreamKey,
+        response: { groups },
+      } = streamInfo;
+
       if (groups.length === 0 || groups[0].consumers.length === 0) {
         // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
@@ -665,25 +595,12 @@ export class RedisBroker {
               .del(clientStreamKey)
               .exec()
               .catch((error: unknown) => {
-                error = this.unwrapRedisMultiErrorReply(error as Error) ?? error;
+                error = unwrapRedisMultiErrorReply(error as Error) ?? error;
                 this.logger.warn(error, `Error while pruning idle client stream`);
               });
           }
         }
       }
     }
-  }
-
-  async getGroupMetadata(client: typeof this.client, groupKey: string) {
-    const xlen = await client.xLen(this.globalStreamKey);
-    const groupsTest1 = await client.xInfoGroups(this.globalStreamKey);
-    const consumersTest1 = await Promise.all(
-      groupsTest1.map(group => client.xPending(this.globalStreamKey, group.name))
-    );
-    const consumerTest2 = await client.xPending(this.globalStreamKey, groupKey);
-    const consumerTest3 = await client.xInfoConsumers(this.globalStreamKey, groupKey);
-    const res = { xlen, groupsTest1, consumersTest1, consumerTest2, consumerTest3 };
-    console.log(JSON.stringify(res, null, 2));
-    return res;
   }
 }

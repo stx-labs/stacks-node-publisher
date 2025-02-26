@@ -2,9 +2,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import { RedisClientType } from 'redis';
+import { createClient, RedisClientType } from 'redis';
 // The redis library defines types in convoluted ways that make referencing them difficult.
 // This file is a helper to extract the types we need for our code.
+
+export type RedisClient = ReturnType<typeof createClient>;
 
 /** Helper function to get the return type of xReadGroup (default overload signature) */
 async function xReadGroupType() {

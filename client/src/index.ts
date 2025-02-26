@@ -39,18 +39,29 @@ export class StacksEventStream {
     redisStreamPrefix?: string;
     appName: string;
   }) {
-    this.client = createClient({ url: args.redisUrl });
     this.eventStreamType = args.eventStreamType;
     this.lastMessageId = args.lastMessageId ?? '0'; // Automatically start at the first message.
     this.abort = new AbortController();
     this.streamWaiter = waiter();
     this.redisStreamPrefix = args.redisStreamPrefix ?? '';
+    if (this.redisStreamPrefix !== '' && !this.redisStreamPrefix.endsWith(':')) {
+      this.redisStreamPrefix += ':';
+    }
     this.appName = args.appName;
+
+    this.client = createClient({
+      url: args.redisUrl,
+      name: this.redisClientName,
+    });
 
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
     this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
     this.client.on('ready', () => this.logger.info('Redis connection ready'));
+  }
+
+  get redisClientName() {
+    return `${this.redisStreamPrefix}snp-consumer:${this.appName}:${this.clientId}`;
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -121,6 +132,7 @@ export class StacksEventStream {
     this.clientId = randomUUID();
     this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
     const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
+    await this.client.clientSetName(this.redisClientName);
 
     const handshakeMsg = {
       client_id: this.clientId,

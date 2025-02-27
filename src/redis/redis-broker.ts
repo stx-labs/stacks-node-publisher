@@ -294,6 +294,9 @@ export class RedisBroker {
                   });
               } else {
                 logger.error(error as Error, `Error reading from global stream for client`);
+                // TODO: Should we perform stream cleanup here too? Otherwise the client will
+                // not be immediately notified (via NOGROUP resp) that the stream is dead, it
+                // will keep trying to read until the prune process performs the cleanup.
               }
             })
             .finally(() => {
@@ -322,11 +325,6 @@ export class RedisBroker {
     logger: typeof this.logger
   ) {
     await client.connect();
-
-    const DB_MSG_BATCH_SIZE = 100;
-    const LIVE_STREAM_BATCH_SIZE = 100;
-    const CLIENT_REDIS_STREAM_MAX_LEN = 100;
-    const CLIENT_REDIS_BACKPRESSURE_POLL_MS = 100;
 
     const clientStreamKey = this.getClientStreamKey(clientId);
     const groupKey = this.getClientGlobalStreamGroupKey(clientId);
@@ -370,7 +368,7 @@ export class RedisBroker {
         FROM messages
         WHERE sequence_number > ${lastQueriedSequenceNumber}
         ORDER BY sequence_number ASC
-        LIMIT ${DB_MSG_BATCH_SIZE}
+        LIMIT ${ENV.DB_MSG_BATCH_SIZE}
       `;
 
       if (dbResults.length > 0) {
@@ -411,10 +409,10 @@ export class RedisBroker {
       const timer = stopwatch();
       while (!this.abortController.signal.aborted) {
         const clientStreamLen = await client.xLen(clientStreamKey);
-        if (clientStreamLen <= CLIENT_REDIS_STREAM_MAX_LEN) {
+        if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
           break;
         } else {
-          await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+          await sleep(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
           if (timer.getElapsedSeconds() > 5) {
             logger.debug(
               `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while backfilling...`
@@ -443,7 +441,7 @@ export class RedisBroker {
           id: '>',
         },
         {
-          COUNT: LIVE_STREAM_BATCH_SIZE,
+          COUNT: ENV.LIVE_STREAM_BATCH_SIZE,
           BLOCK: 1000,
         }
       );
@@ -470,10 +468,10 @@ export class RedisBroker {
         const timer = stopwatch();
         while (!this.abortController.signal.aborted) {
           const clientStreamLen = await client.xLen(clientStreamKey);
-          if (clientStreamLen <= CLIENT_REDIS_STREAM_MAX_LEN) {
+          if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
             break;
           } else {
-            await sleep(CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+            await sleep(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
             if (timer.getElapsedSeconds() > 5) {
               logger.debug(
                 `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while live-streaming...`
@@ -525,15 +523,6 @@ export class RedisBroker {
   async pruneIdleClients() {
     // Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
     // up with the global stream, otherwise the global stream will continue to grow and OOM redis.
-    let MAX_IDLE_TIME = 60_000; // 1 minute
-    let MAX_MSG_LAG = 200;
-
-    const debugging = true;
-    if (debugging) {
-      MAX_IDLE_TIME = 2_000; // 2 seconds
-      MAX_MSG_LAG = 102;
-    }
-
     const fullStreamInfo = await xInfoStreamFull(this.client, this.globalStreamKey);
     const lastEntryID = fullStreamInfo.lastGeneratedId
       ? parseInt(fullStreamInfo.lastGeneratedId.split('-')[0])
@@ -546,12 +535,13 @@ export class RedisBroker {
         );
       }
       for (const consumer of group.consumers) {
+        // TODO: this last ID comparison assumes consecutive integers for the message IDs, which may not always be the case.
         const msgsBehind = lastEntryID
           ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
           : 0;
         const idleMs = Date.now() - consumer.seenTime;
-        const isIdle = idleMs > MAX_IDLE_TIME;
-        const isTooSlow = msgsBehind > MAX_MSG_LAG;
+        const isIdle = idleMs > ENV.MAX_IDLE_TIME_MS;
+        const isTooSlow = msgsBehind > ENV.MAX_MSG_LAG;
         if (isIdle || isTooSlow) {
           const clientId = consumer.name.split(':').at(-1) ?? '';
           const clientStreamKey = this.getClientStreamKey(clientId);
@@ -606,7 +596,7 @@ export class RedisBroker {
         }
         for (const consumer of group.consumers) {
           const idleMs = Date.now() - consumer.seenTime;
-          if (idleMs > MAX_IDLE_TIME) {
+          if (idleMs > ENV.MAX_IDLE_TIME_MS) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientGlobalStreamGroupKey(clientId);
             const globalStreamGroup = fullStreamInfo.groups.find(g => g.name === groupId);

@@ -279,25 +279,22 @@ export class RedisBroker {
               error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               if ((error as Error).message?.includes('NOGROUP')) {
                 logger.warn(error as Error, `Consumer group not found for client (likely pruned)`);
-                const groupKey = this.getClientGlobalStreamGroupKey(clientId);
-                const clientStreamKey = this.getClientStreamKey(clientId);
-                await this.client
-                  .multi()
-                  // Destroy the global stream consumer group for this client
-                  .xGroupDestroy(this.globalStreamKey, groupKey)
-                  // Destroy the stream for this client (notifies the client via NOGROUP error on xReadGroup)
-                  .del(clientStreamKey)
-                  .exec()
-                  .catch((error: unknown) => {
-                    error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-                    logger.warn(error, `Error cleaning up client connection`);
-                  });
               } else {
-                logger.error(error as Error, `Error reading from global stream for client`);
-                // TODO: Should we perform stream cleanup here too? Otherwise the client will
-                // not be immediately notified (via NOGROUP resp) that the stream is dead, it
-                // will keep trying to read until the prune process performs the cleanup.
+                logger.error(error as Error, `Error processing msgs for consumer stream`);
               }
+              const groupKey = this.getClientGlobalStreamGroupKey(clientId);
+              const clientStreamKey = this.getClientStreamKey(clientId);
+              await this.client
+                .multi()
+                // Destroy the global stream consumer group for this client
+                .xGroupDestroy(this.globalStreamKey, groupKey)
+                // Destroy the stream for this client (notifies the client via NOGROUP error on xReadGroup)
+                .del(clientStreamKey)
+                .exec()
+                .catch((error: unknown) => {
+                  error = unwrapRedisMultiErrorReply(error as Error) ?? error;
+                  logger.warn(error, `Error cleaning up client connection`);
+                });
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
@@ -369,7 +366,10 @@ export class RedisBroker {
         WHERE sequence_number > ${lastQueriedSequenceNumber}
         ORDER BY sequence_number ASC
         LIMIT ${ENV.DB_MSG_BATCH_SIZE}
-      `;
+      `.catch((error: unknown) => {
+        logger.error(error as Error, `Error querying messages from postgres during backfill`);
+        throw error;
+      });
 
       if (dbResults.length > 0) {
         lastQueriedSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
@@ -583,7 +583,10 @@ export class RedisBroker {
       if (groups.length === 0 || groups[0].consumers.length === 0) {
         // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
-        await this.client.del(clientStreamKey);
+        await this.client.del(clientStreamKey).catch((error: unknown) => {
+          error = unwrapRedisMultiErrorReply(error as Error) ?? error;
+          this.logger.warn(error, `Error while pruning idle client stream`);
+        });
       }
       if (groups.length > 1) {
         this.logger.error(`Multiple groups for client stream ${clientStreamKey}: ${groups.length}`);

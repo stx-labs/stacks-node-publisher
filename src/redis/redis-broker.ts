@@ -232,9 +232,13 @@ export class RedisBroker {
       }
     }
 
-    // TODO: this should be debounced or called on some interval or theshold, not on every message
+    // TODO: these should be debounced or called on some interval or theshold, not on every message.
+    // Consider:
+    // - create a dedicated redis client used for pruning.
+    // - run this on an configurable interval.
+    // - keep track in nodejs memory of how many messages have been added since the last prune,
+    //   and if that count exceeds a threshold then run the prune (faster than the interval).
     await this.trimGlobalStream();
-    // TODO: this should be debounced or called on some interval or theshold, not on every message
     await this.pruneIdleClients();
   }
 
@@ -354,6 +358,8 @@ export class RedisBroker {
     // from the pool for the duration of the backfilling, which could be a long time for large backfills.
     let lastQueriedSequenceNumber = lastMessageId.split('-')[0];
     while (!this.abortController.signal.aborted) {
+      // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
+      // persisted-storage layer agnostic to whatever storage is used.
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
       >`
@@ -502,6 +508,8 @@ export class RedisBroker {
         minDeliveredId = lastDeliveredID;
       }
     }
+    // TODO: possible race-condition if a new group is added after this `fetch xInfoGroups` but before the `xTrim`,
+    // where we trim messages that are still needed by the new group.
     if (minDeliveredId) {
       this.logger.info(`Trimming global stream to min delivered ID ${minDeliveredId}`);
       // All entries that have an ID lower than minDeliveredId will be evicted

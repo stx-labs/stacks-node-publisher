@@ -15,6 +15,19 @@ async function initApp() {
     createSchema: !isReadonly,
   });
 
+  // TODO: consider the following runmodes:
+  // - ingestion (must only be one instance):
+  //    * http event observer server (that stacks-node(s) POST to)
+  //    * persisting events to postgres
+  //    * writing events to the redis global stream
+  // - broker (can be multiple instances):
+  //    * listening and handling snp client connection requests
+  //    * backfilling msgs from postgres to the client-specific redis streams
+  //    * buffering msgs from the redis global stream to the client-specific redis streams
+  // - prune (should only be one instance):
+  //    * periodically deleting idle client-specific redis streams
+  //    * periodically trimming old msgs from the redis global stream
+
   // Setup default prometheus metrics
   const promRegistry = new Registry();
   collectDefaultMetrics({ register: promRegistry });

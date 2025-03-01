@@ -1,3 +1,4 @@
+import * as net from 'node:net';
 import * as Docker from 'dockerode';
 import { connectPostgres } from '@hirosystems/api-toolkit';
 import { createClient } from 'redis';
@@ -63,10 +64,11 @@ async function startContainer({
     }
     console.log(`Creating ${image} container...`);
     const exposedPorts = ports.reduce((acc, port) => ({ ...acc, [`${port}/tcp`]: {} }), {});
-    const portBindings = ports.reduce(
-      (acc, port) => ({ ...acc, [`${port}/tcp`]: [{ HostPort: '0' }] }),
-      {}
-    );
+    const portBindings: Record<string, { HostPort: string }[]> = {};
+    const freePorts = await findFreePorts(ports.length);
+    ports.forEach((port, index) => {
+      portBindings[`${port}/tcp`] = [{ HostPort: freePorts[index].toString() }];
+    });
     const container = await docker.createContainer({
       Labels: { [testContainerLabel]: 'true' },
       Image: image,
@@ -100,6 +102,24 @@ async function startContainer({
     console.error('Error starting PostgreSQL container:', error);
     throw error;
   }
+}
+
+async function findFreePorts(count: number) {
+  const servers = await Promise.all(
+    Array.from({ length: count }, () => {
+      return new Promise<net.Server>((resolve, reject) => {
+        const server = net.createServer();
+        server.listen(0, () => resolve(server)).on('error', reject);
+      });
+    })
+  );
+  const ports = await Promise.all(
+    servers.map(server => {
+      const { port } = server.address() as net.AddressInfo;
+      return new Promise<number>(resolve => server.close(() => resolve(port)));
+    })
+  );
+  return ports;
 }
 
 // Helper function to wait for PostgreSQL to be ready

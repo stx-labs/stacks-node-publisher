@@ -1,9 +1,9 @@
-import { ClientClosedError, createClient } from 'redis';
+import { ClientClosedError, createClient, WatchError } from 'redis';
 import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
-import type { RedisClient } from './redis-types';
+import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 
 enum StreamType {
@@ -34,6 +34,12 @@ export class RedisBroker {
     return { unregister: () => this.testRegisterOnLiveStreamTransitionCbs.delete(cb) };
   }
 
+  _testOnTrimGlobalStreamGetGroups = new Set<() => Promise<void>>();
+  _testRegisterOnTrimGlobalStreamGetGroups(cb: () => Promise<void>) {
+    this._testOnTrimGlobalStreamGetGroups.add(cb);
+    return { unregister: () => this._testOnTrimGlobalStreamGetGroups.delete(cb) };
+  }
+
   constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string; db: PgStore }) {
     this.db = args.db;
     this.redisStreamKeyPrefix = args.redisStreamKeyPrefix;
@@ -61,6 +67,10 @@ export class RedisBroker {
     this.ingestionClient.on('error', (err: Error) =>
       this.logger.error(err, 'Redis error on ingestion client')
     );
+  }
+
+  get globalStreamGroupVersionKey() {
+    return `${this.globalStreamKey}:group_version`;
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -350,6 +360,7 @@ export class RedisBroker {
       .multi()
       .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
       .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)
+      .incr(this.globalStreamGroupVersionKey)
       .exec();
     logger.info(`Consumer group created on global stream for client`);
 
@@ -499,33 +510,73 @@ export class RedisBroker {
   // message in the global stream that has been acknowledged by all consumer groups and trims the stream
   // to that message.
   async trimGlobalStream() {
-    const startLen = await this.client.xLen(this.globalStreamKey);
-    const groups = await this.client.xInfoGroups(this.globalStreamKey);
-    let minDeliveredId: number | null = null;
-    for (const group of groups) {
-      const lastDeliveredID = parseInt(group.lastDeliveredId.split('-')[0]);
-      if (minDeliveredId === null || lastDeliveredID < minDeliveredId) {
-        minDeliveredId = lastDeliveredID;
+    try {
+      // Use an optimistic redis transaction to trim the global stream in order to prevent a race-condition
+      // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
+      // messages.
+      return await this.client.executeIsolated(async isolatedClient => {
+        // Watch the global stream group version key to ensure that this trim operation is aborted if
+        // any new consumer groups are added while we're trimming.
+        await isolatedClient.watch(this.globalStreamGroupVersionKey);
+
+        let groups: XInfoGroupsResponse;
+        try {
+          groups = await isolatedClient.xInfoGroups(this.globalStreamKey);
+        } catch (error) {
+          if ((error as Error).message?.includes('ERR no such key')) {
+            // Global stream doesn't exist yet so nothing to trim
+            this.logger.info(`Trim performed when global stream doesn't exist yet`);
+            return { result: 'no_stream_exists' } as const;
+          } else {
+            throw error;
+          }
+        }
+
+        for (const testFn of this._testOnTrimGlobalStreamGetGroups) {
+          await testFn();
+        }
+
+        let minDeliveredId: number | null = null;
+        for (const group of groups) {
+          const lastDeliveredID = parseInt(group.lastDeliveredId.split('-')[0]);
+          if (minDeliveredId === null || lastDeliveredID < minDeliveredId) {
+            minDeliveredId = lastDeliveredID;
+          }
+        }
+
+        if (minDeliveredId) {
+          this.logger.info(`Trimming global stream to min delivered ID ${minDeliveredId}`);
+          // All entries that have an ID lower than minDeliveredId will be evicted
+          await isolatedClient
+            .multi()
+            .xTrim(this.globalStreamKey, 'MINID', minDeliveredId, {
+              strategyModifier: '=', // '~'
+            })
+            .exec();
+          return { result: 'trimmed_minid', id: minDeliveredId } as const;
+        } else {
+          this.logger.info(`No groups are active, trimming global stream to the last message`);
+          // No groups are active, so we can trim the stream to 1, we keep the last message
+          // so the ingestion code can still read the last message ID.
+          await isolatedClient
+            .multi()
+            .xTrim(this.globalStreamKey, 'MAXLEN', 1, {
+              strategyModifier: '=', // '~'
+            })
+            .exec();
+          return { result: 'trimmed_maxlen' } as const;
+        }
+      });
+    } catch (error) {
+      if (error instanceof WatchError) {
+        // The transaction aborted because a consumer group was added while we were trimming
+        this.logger.info(`Trimming aborted due to new group added`);
+        return { result: 'aborted' } as const;
+      } else {
+        this.logger.error(error as Error, 'Error trimming global stream');
+        throw error;
       }
     }
-    // TODO: possible race-condition if a new group is added after this `fetch xInfoGroups` but before the `xTrim`,
-    // where we trim messages that are still needed by the new group.
-    if (minDeliveredId) {
-      this.logger.info(`Trimming global stream to min delivered ID ${minDeliveredId}`);
-      // All entries that have an ID lower than minDeliveredId will be evicted
-      await this.client.xTrim(this.globalStreamKey, 'MINID', minDeliveredId, {
-        strategyModifier: '=', // '~'
-      });
-    } else {
-      this.logger.info(`No groups are active, trimming global stream to the last message`);
-      // No groups are active, so we can trim the stream to 1, we keep the last message
-      // so the ingestion code can still read the last message ID.
-      await this.client.xTrim(this.globalStreamKey, 'MAXLEN', 1, {
-        strategyModifier: '=', // '~'
-      });
-    }
-    const endLen = await this.client.xLen(this.globalStreamKey);
-    this.logger.info(`Trimmed global stream from length ${startLen} to ${endLen}`);
   }
 
   async pruneIdleClients() {

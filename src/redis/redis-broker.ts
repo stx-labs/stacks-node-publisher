@@ -139,19 +139,19 @@ export class RedisBroker {
 
   async close() {
     this.abortController.abort();
-    await this.client.quit().catch((error: unknown) => {
+    await this.client.disconnect().catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing primary redis client connection');
       }
     });
-    await this.ingestionClient.quit().catch((error: unknown) => {
+    await this.ingestionClient.disconnect().catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing ingestion redis client connection');
       }
     });
     await Promise.all(
       [...this.perConsumerClients].map(client =>
-        client.quit().catch((error: unknown) => {
+        client.disconnect().catch((error: unknown) => {
           if (!(error instanceof ClientClosedError)) {
             this.logger.debug(error, 'Error closing per-consumer redis client connection');
           }

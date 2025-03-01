@@ -77,4 +77,23 @@ export class PgStore extends BasePgStore {
     const { sequence_number, timestamp } = insertQuery[0];
     return { sequence_number, timestamp };
   }
+
+  public async getLastMessage() {
+    const dbResults = await this.sql<
+      { sequence_number: string; timestamp: string; path: string; content: string }[]
+    >`
+      SELECT
+        sequence_number,
+        (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+        path,
+        content
+      FROM messages
+      ORDER BY sequence_number DESC
+      LIMIT 1
+    `;
+    if (dbResults.length === 0) {
+      return null;
+    }
+    return dbResults[0];
+  }
 }

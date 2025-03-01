@@ -45,17 +45,13 @@ async function pruneContainers(docker: Docker, label: string) {
   return containers.length;
 }
 
-async function startContainer({
-  docker,
-  image,
-  ports,
-  env,
-}: {
+async function startContainer(args: {
   docker: Docker;
   image: string;
   ports: number[];
   env: string[];
-}): Promise<{ image: string; bindedPorts: { [port: number]: number } }> {
+}) {
+  const { docker, image, ports, env } = args;
   try {
     const imgPulled = await isDockerImagePulled(docker, image);
     if (!imgPulled) {
@@ -97,7 +93,7 @@ async function startContainer({
     containerIds.push(container.id);
     Object.assign(globalThis, { __TEST_DOCKER_CONTAINER_IDS: containerIds });
 
-    return { image, bindedPorts };
+    return { image, bindedPorts, containerId: container.id };
   } catch (error) {
     console.error('Error starting PostgreSQL container:', error);
     throw error;
@@ -182,6 +178,7 @@ export default async function setup(): Promise<void> {
     for (const entry of Object.entries(pgConfig)) {
       process.env[entry[0]] = entry[1];
     }
+    process.env['_PG_DOCKER_CONTAINER_ID'] = pgContainer.containerId;
     // Wait for the database to be ready
     await waitForPostgres();
   };
@@ -195,6 +192,7 @@ export default async function setup(): Promise<void> {
       env: [],
     });
     process.env['REDIS_URL'] = `redis://127.0.0.1:${redisContainer.bindedPorts[redisPort]}`;
+    process.env['_REDIS_DOCKER_CONTAINER_ID'] = redisContainer.containerId;
     // wait for redis to be ready
     await waitForRedis();
   };

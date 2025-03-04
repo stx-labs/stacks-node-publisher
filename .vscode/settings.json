@@ -1,0 +1,5 @@
+{
+  "jestrunner.debugOptions": {
+    "runtimeArgs": [ "--experimental-vm-modules" ]
+  },
+}

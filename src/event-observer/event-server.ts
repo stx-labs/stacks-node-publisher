@@ -2,7 +2,7 @@ import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http
 import { logger as defaultLogger, SERVER_VERSION } from '@hirosystems/api-toolkit';
 import { AddressInfo } from 'node:net';
 import { Counter, Histogram, Registry, Summary } from 'prom-client';
-import PQueue from 'p-queue';
+import { PQueue, PQueueModule } from '../pqueue-import';
 
 export type EventMessageHandler = (
   eventPath: string,
@@ -16,13 +16,14 @@ export class EventObserverServer {
   readonly eventMessageHandler: EventMessageHandler;
   readonly promRegistry: Registry;
   readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
-  readonly queue = new PQueue({ concurrency: 1 });
+  readonly queue: PQueue;
 
   constructor(args: { eventMessageHandler: EventMessageHandler; promRegistry: Registry }) {
     this.eventMessageHandler = args.eventMessageHandler;
     this.promRegistry = args.promRegistry;
     this.promMetrics = this.setupPromMetrics();
     this.server = createServer((req, res) => this.requestListener(req, res));
+    this.queue = new PQueueModule.class({ concurrency: 1 });
   }
 
   get url(): string {

@@ -32,6 +32,8 @@ export class StacksEventStream {
   private readonly CONSUMER_NAME = 'primary_consumer';
   private readonly MSG_BATCH_SIZE = 100;
 
+  connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
+
   constructor(args: {
     redisUrl?: string;
     eventStreamType: StacksEventStreamType;
@@ -56,8 +58,18 @@ export class StacksEventStream {
 
     // Must have a listener for 'error' events to avoid unhandled exceptions
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
-    this.client.on('reconnecting', () => this.logger.info('Reconnecting to Redis'));
-    this.client.on('ready', () => this.logger.info('Redis connection ready'));
+    this.client.on('reconnecting', () => {
+      this.connectionStatus = 'reconnecting';
+      this.logger.info('Reconnecting to Redis');
+    });
+    this.client.on('ready', () => {
+      this.connectionStatus = 'connected';
+      this.logger.info('Redis connection ready');
+    });
+    this.client.on('end', () => {
+      this.connectionStatus = 'ended';
+      this.logger.info('Redis connection ended');
+    });
   }
 
   get redisClientName() {

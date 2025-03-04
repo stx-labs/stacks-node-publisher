@@ -25,6 +25,7 @@ export class RedisBroker {
 
   readonly events = new EventEmitter<{
     idleConsumerPruned: [{ clientId: string }];
+    laggingConsumerPruned: [{ clientId: string }];
   }>();
 
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
@@ -640,6 +641,9 @@ export class RedisBroker {
             });
           if (isIdle) {
             this.events.emit('idleConsumerPruned', { clientId });
+          }
+          if (isTooSlow) {
+            this.events.emit('laggingConsumerPruned', { clientId });
           }
         }
       }

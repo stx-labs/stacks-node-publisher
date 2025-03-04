@@ -91,7 +91,7 @@ describe('Redis interrupts', () => {
 
   test('client connect succeeds once redis is available', async () => {
     const lastDbMsg = await db.getLastMessage();
-    const client = await createTestClient(lastDbMsg?.sequence_number.toString());
+    const client = await createTestClient(lastDbMsg?.sequence_number);
     const testMsg1 = { test: randomUUID() };
     let lastMsgWaiter = waiter<any>();
     client.start((_id, _timestamp, _path, body) => {

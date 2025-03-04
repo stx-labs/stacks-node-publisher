@@ -1,6 +1,7 @@
 import { createClient, RedisClientType } from 'redis';
 import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/api-toolkit';
 import { randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 
 export type StreamedStacksEventCallback = (
   id: string,
@@ -16,9 +17,9 @@ export enum StacksEventStreamType {
 }
 
 export class StacksEventStream {
-  private readonly client: RedisClientType;
+  readonly client: RedisClientType;
   private readonly eventStreamType: StacksEventStreamType;
-  private clientId = randomUUID();
+  clientId = randomUUID();
   private lastMessageId: string;
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
@@ -33,6 +34,10 @@ export class StacksEventStream {
   private readonly MSG_BATCH_SIZE = 100;
 
   connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
+
+  readonly events = new EventEmitter<{
+    redisConsumerGroupDestroyed: [];
+  }>();
 
   constructor(args: {
     redisUrl?: string;
@@ -116,6 +121,7 @@ export class StacksEventStream {
               error as Error,
               `The redis stream group for this client was destroyed by the server`
             );
+            this.events.emit('redisConsumerGroupDestroyed');
             // re-announce connection, re-create group, etc
             continue;
           } else {

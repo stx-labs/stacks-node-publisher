@@ -5,6 +5,7 @@ import { PgStore } from '../pg/pg-store';
 import { sleep } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
+import { EventEmitter } from 'node:events';
 
 enum StreamType {
   ALL = 'all',
@@ -22,6 +23,10 @@ export class RedisBroker {
   readonly abortController = new AbortController();
   readonly db: PgStore;
 
+  readonly events = new EventEmitter<{
+    idleConsumerPruned: [{ clientId: string }];
+  }>();
+
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
   testRegisterOnLiveStreamTransition(cb: () => Promise<void>) {
     this.testOnLiveStreamTransitionCbs.add(cb);
@@ -38,6 +43,12 @@ export class RedisBroker {
   _testRegisterOnTrimGlobalStreamGetGroups(cb: () => Promise<void>) {
     this._testOnTrimGlobalStreamGetGroups.add(cb);
     return { unregister: () => this._testOnTrimGlobalStreamGetGroups.delete(cb) };
+  }
+
+  _testOnPgBackfillLoop = new Set<(msgId: string) => Promise<void>>();
+  _testRegisterOnPgBackfillLoop(cb: (msgId: string) => Promise<void>) {
+    this._testOnPgBackfillLoop.add(cb);
+    return { unregister: () => this._testOnPgBackfillLoop.delete(cb) };
   }
 
   constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string; db: PgStore }) {
@@ -421,6 +432,13 @@ export class RedisBroker {
         })
       );
 
+      if (dbResults.length > 0) {
+        for (const cb of this._testOnPgBackfillLoop) {
+          // Only used by tests
+          await cb(dbResults[0].sequence_number);
+        }
+      }
+
       // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
       // is below a certain threshold before continuing.
       const timer = stopwatch();
@@ -620,6 +638,9 @@ export class RedisBroker {
               error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               this.logger.warn(error, `Error while pruning idle client groups`);
             });
+          if (isIdle) {
+            this.events.emit('idleConsumerPruned', { clientId });
+          }
         }
       }
     }
@@ -684,6 +705,7 @@ export class RedisBroker {
                 error = unwrapRedisMultiErrorReply(error as Error) ?? error;
                 this.logger.warn(error, `Error while pruning idle client stream`);
               });
+            this.events.emit('idleConsumerPruned', { clientId });
           }
         }
       }

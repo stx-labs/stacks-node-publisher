@@ -14,6 +14,7 @@ enum StreamType {
 export class RedisBroker {
   client: RedisClient;
   ingestionClient: RedisClient;
+  listeningClient: RedisClient;
   perConsumerClients = new Set<RedisClient>();
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
@@ -79,6 +80,13 @@ export class RedisBroker {
     this.ingestionClient.on('error', (err: Error) =>
       this.logger.error(err, 'Redis error on ingestion client')
     );
+
+    this.listeningClient = this.client.duplicate({
+      name: `${this.redisStreamKeyPrefix}snp-client-listener`,
+    });
+    this.listeningClient.on('error', (err: Error) =>
+      this.logger.error(err, 'Redis error on client connection listener')
+    );
   }
 
   get globalStreamGroupVersionKey() {
@@ -95,10 +103,13 @@ export class RedisBroker {
       try {
         await this.client.connect();
         await this.ingestionClient.connect();
+        await this.listeningClient.connect();
+
         const primaryClientID = await this.client.clientId();
         const ingestionClientID = await this.ingestionClient.clientId();
+        const listeningClientID = await this.listeningClient.clientId();
         this.logger.info(
-          `Connected to Redis, client ID: ${primaryClientID}, ingestion client ID: ${ingestionClientID}`
+          `Connected to Redis, client ID: ${primaryClientID}, ingestion client ID: ${ingestionClientID}, listening client ID: ${listeningClientID}`
         );
       } catch (err) {
         this.logger.error(err as Error, 'Fatal error connecting to Redis');
@@ -106,28 +117,10 @@ export class RedisBroker {
       }
     };
 
-    if (waitForReady) {
-      await connectClients();
-    } else {
-      void connectClients().catch((err: unknown) => {
-        this.logger.error(err as Error, 'Fatal error connecting to Redis');
-        process.exit(1);
-      });
-    }
-
-    const listeningClient = this.client.duplicate({
-      name: `${this.redisStreamKeyPrefix}snp-client-listener`,
-    });
-    this.perConsumerClients.add(listeningClient);
-    listeningClient.on('error', (err: Error) =>
-      this.logger.error(err, 'Redis error on client connection listener')
-    );
-
     const connectionListener = async () => {
-      await listeningClient.connect();
       while (!this.abortController.signal.aborted) {
         try {
-          await this.listenForConnections(listeningClient);
+          await this.listenForConnections(this.listeningClient);
         } catch (error) {
           if (this.abortController.signal.aborted) {
             break;
@@ -137,16 +130,21 @@ export class RedisBroker {
           }
         }
       }
-      // Close the listening client connection after handling the connections
-      await listeningClient.quit().catch((error: unknown) => {
-        if (!(error instanceof ClientClosedError)) {
-          this.logger.debug(error as Error, 'Error closing listening client connection');
-        }
-      });
     };
-    void connectionListener().finally(() => {
-      this.perConsumerClients.delete(listeningClient);
-    });
+
+    if (waitForReady) {
+      await connectClients();
+      void connectionListener();
+    } else {
+      void connectClients()
+        .then(() => {
+          void connectionListener();
+        })
+        .catch((err: unknown) => {
+          this.logger.error(err as Error, 'Fatal error connecting to Redis');
+          process.exit(1);
+        });
+    }
   }
 
   async close() {
@@ -159,6 +157,11 @@ export class RedisBroker {
     await this.ingestionClient.disconnect().catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing ingestion redis client connection');
+      }
+    });
+    await this.listeningClient.disconnect().catch((error: unknown) => {
+      if (!(error instanceof ClientClosedError)) {
+        this.logger.debug(error, 'Error closing listening redis client connection');
       }
     });
     await Promise.all(
@@ -297,6 +300,9 @@ export class RedisBroker {
           const dedicatedClient = this.client.duplicate({
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
           });
+
+          this.perConsumerClients.add(dedicatedClient);
+
           dedicatedClient.on('error', (err: Error) => {
             if (!this.abortController.signal.aborted) {
               logger.error(err, `Redis error on dedicated client connection for client`);
@@ -328,6 +334,7 @@ export class RedisBroker {
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
+              this.perConsumerClients.delete(dedicatedClient);
               dedicatedClient.quit().catch((error: unknown) => {
                 if (!this.abortController.signal.aborted) {
                   logger.warn(error as Error, `Error closing dedicated client connection`);
@@ -374,7 +381,7 @@ export class RedisBroker {
     // The special key `$` instructs redis to hold onto all new messages, which could be added to the stream
     // right after the postgres backfilling is complete, but before we transition to live streaming.
     const msgId = '$';
-    await this.client
+    await client
       .multi()
       .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
       .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)

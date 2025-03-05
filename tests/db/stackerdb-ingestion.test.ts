@@ -7,7 +7,8 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { createClient } from 'redis';
+import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { waiter } from '@hirosystems/api-toolkit';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;
@@ -68,32 +69,40 @@ describe('Stackerdb ingestion tests', () => {
     await redisBroker.close();
   });
 
-  test('stream messages from redis', async () => {
-    const appRedisClient = createClient({
-      url: ENV.REDIS_URL,
-      name: 'salt-n-pepper-server-client-test',
+  async function createTestClient(lastMsgId = '0') {
+    const client = new StacksEventStream({
+      redisUrl: ENV.REDIS_URL,
+      eventStreamType: StacksEventStreamType.all,
+      lastMessageId: lastMsgId,
+      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      appName: 'snp-client-test',
     });
-    await appRedisClient.connect();
-    const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
+    await client.connect({ waitForReady: true });
+    return client;
+  }
 
-    const queuedMessageCount = await appRedisClient.xLen(streamKey);
-    expect(queuedMessageCount).toBeGreaterThan(0);
+  test('stream messages', async () => {
+    const lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    const lastDbMsgId = parseInt(lastDbMsg.sequence_number.split('-')[0]);
+    const client = await createTestClient();
 
-    let lastMsgId = '0';
-    let messagedProcessed = 0;
-    for (let i = 0; i < queuedMessageCount; i++) {
-      const streamMessages = await appRedisClient.xRead(
-        { key: streamKey, id: lastMsgId },
-        { BLOCK: 3000, COUNT: 1 }
-      );
-      assert.ok(streamMessages);
-      expect(streamMessages).toHaveLength(1);
-      expect(streamMessages[0].messages).toHaveLength(1);
-      lastMsgId = streamMessages[0].messages[0].id;
-      messagedProcessed++;
-    }
-    expect(messagedProcessed).toBe(queuedMessageCount);
-    expect(lastMsgId).toBe(`${queuedMessageCount}-0`);
-    await appRedisClient.quit();
+    const allMsgsReceivedWaiter = waiter();
+
+    let lastReceivedMsgId = 0;
+    client.start(id => {
+      const msgId = parseInt(id.split('-')[0]);
+      expect(msgId).toBe(lastReceivedMsgId + 1);
+      lastReceivedMsgId = msgId;
+      // Check if all msgs that are in pg have been received by the client
+      if (msgId === lastDbMsgId) {
+        allMsgsReceivedWaiter.finish();
+      }
+      return Promise.resolve();
+    });
+
+    await allMsgsReceivedWaiter;
+
+    await client.stop();
   });
 });

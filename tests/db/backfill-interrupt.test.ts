@@ -7,6 +7,7 @@ import { sleep, waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
 import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
+import * as assert from 'node:assert';
 
 describe('Backfill tests', () => {
   let db: PgStore;
@@ -291,6 +292,103 @@ describe('Backfill tests', () => {
 
     // Wait for client redis connection to be killed during the backfilling process
     await backfillHit;
+
+    const { originalClientId } = await firstMsgsReceived;
+
+    // Client should reconnect and continue processing messages
+    lastDbMsg = await db.getLastMessage();
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+    });
+
+    // Send over ENV.MAX_MSG_LAG messages to force the old and now disconnected stream to be pruned
+    for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
+      await sendTestEvent(eventServer, { laggingMsgNumber: i });
+    }
+
+    // The client consumer redis stream should be pruned
+    const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
+    const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
+    expect(clientStreamExists).toBe(0);
+
+    // The client consumer group on the global stream should be pruned
+    const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
+    const globalStreamGroupExists = await redisBroker.client
+      .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      .then(
+        () => {
+          throw new Error('Expected xInfoConsumers to reject');
+        },
+        (error: Error) => {
+          if (error?.message.includes('NOGROUP')) {
+            return false;
+          } else {
+            throw error;
+          }
+        }
+      );
+    expect(globalStreamGroupExists).toBe(false);
+
+    await client.stop();
+    ENV.reload();
+  });
+
+  test('Server redis connection for client is killed during pg backfill', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    ENV.MAX_MSG_LAG = 100;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    const client = await createTestClient(lastDbMsg?.sequence_number);
+    ensureSequenceMsgOrder(client);
+
+    const backfillHit = waiterNew();
+    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
+      const perConsumerClient = [...redisBroker.perConsumerClients].find(
+        ([_, entry]) => entry.clientId === client.clientId
+      )?.[0];
+      assert(perConsumerClient);
+      const perConsumerClientRedisConnectionID = await perConsumerClient.clientId();
+      const clientKillCount = await redisBroker.client.clientKill({
+        filter: ClientKillFilters.ID,
+        id: perConsumerClientRedisConnectionID,
+      });
+      expect(clientKillCount).toBe(1);
+
+      backfillHit.finish();
+
+      onBackfill.unregister();
+      return Promise.resolve();
+    });
+
+    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    client.start(async (_id, _timestamp, _path, _body) => {
+      if (!firstMsgsReceived.isFinished) {
+        // Grab the original client ID before the client reconnects
+        firstMsgsReceived.finish({ originalClientId: client.clientId });
+      }
+      return Promise.resolve();
+    });
+
+    // Wait for per-consumer redis client connection to be killed during the backfilling process
+    await backfillHit;
+
+    // Client should notice the consumer group is destroyed
+    await once(client.events, 'redisConsumerGroupDestroyed');
+
+    // New consumer redis client should be created
+    const [newConsumerClient] = (await once(redisBroker.events, 'perConsumerClientCreated')) as [
+      { clientId: string },
+    ];
+    expect(newConsumerClient.clientId).toBe(client.clientId);
 
     const { originalClientId } = await firstMsgsReceived;
 

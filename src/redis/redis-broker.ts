@@ -15,7 +15,7 @@ export class RedisBroker {
   client: RedisClient;
   ingestionClient: RedisClient;
   listeningClient: RedisClient;
-  perConsumerClients = new Set<RedisClient>();
+  perConsumerClients = new Map<RedisClient, { clientId: string }>();
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
   readonly redisStreamKeyPrefix: string;
@@ -27,6 +27,7 @@ export class RedisBroker {
   readonly events = new EventEmitter<{
     idleConsumerPruned: [{ clientId: string }];
     laggingConsumerPruned: [{ clientId: string }];
+    perConsumerClientCreated: [{ clientId: string }];
   }>();
 
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
@@ -165,7 +166,7 @@ export class RedisBroker {
       }
     });
     await Promise.all(
-      [...this.perConsumerClients].map(client =>
+      [...this.perConsumerClients].map(([client]) =>
         client.disconnect().catch((error: unknown) => {
           if (!(error instanceof ClientClosedError)) {
             this.logger.debug(error, 'Error closing per-consumer redis client connection');
@@ -299,9 +300,11 @@ export class RedisBroker {
           const logger = this.logger.child({ clientId, appName });
           const dedicatedClient = this.client.duplicate({
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
+            disableOfflineQueue: true,
           });
 
-          this.perConsumerClients.add(dedicatedClient);
+          this.perConsumerClients.set(dedicatedClient, { clientId });
+          this.events.emit('perConsumerClientCreated', { clientId });
 
           dedicatedClient.on('error', (err: Error) => {
             if (!this.abortController.signal.aborted) {

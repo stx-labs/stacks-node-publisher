@@ -183,6 +183,7 @@ describe('Endpoint tests', () => {
       eventStreamType: StacksEventStreamType.all,
       lastMessageId: lastMsgId,
       redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      appName: 'salt-n-pepper-server-client-test',
     });
     await client.connect({ waitForReady: true });
     let messagesProcessed = 0;

@@ -3,7 +3,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -42,29 +42,6 @@ describe('Prune tests', () => {
     await redisBroker.close();
   });
 
-  async function sendTestEvent() {
-    const res = await fetch(eventServer.url + '/test_path', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ test: 1 }),
-    });
-    if (res.status !== 200) {
-      throw new Error(`Failed to POST event: ${res.status}`);
-    }
-  }
-
-  async function createTestClient() {
-    const client = new StacksEventStream({
-      redisUrl: ENV.REDIS_URL,
-      eventStreamType: StacksEventStreamType.all,
-      lastMessageId: '0',
-      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
-      appName: 'snp-client-test',
-    });
-    await client.connect({ waitForReady: true });
-    return client;
-  }
-
   /*
   // Client msg pump
   let lastClientMsgId = 0;
@@ -85,13 +62,14 @@ describe('Prune tests', () => {
     let trimResult = await redisBroker.trimGlobalStream();
     expect(trimResult).toEqual({ result: 'no_stream_exists' });
 
-    await sendTestEvent();
+    await sendTestEvent(eventServer);
 
     // No consumers, expect trim to maxlen
     trimResult = await redisBroker.trimGlobalStream();
     expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
 
     const client = await createTestClient();
+    ensureSequenceMsgOrder(client);
 
     const lastClientMsgId = await new Promise<number>(resolve => {
       client.start(id => {

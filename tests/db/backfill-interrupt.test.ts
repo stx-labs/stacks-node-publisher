@@ -3,9 +3,9 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
 import { sleep, waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
+import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
 
 describe('Backfill tests', () => {
   let db: PgStore;
@@ -44,29 +44,6 @@ describe('Backfill tests', () => {
     await redisBroker.close();
   });
 
-  async function sendTestEvent(body: any = { test: 1 }) {
-    const res = await fetch(eventServer.url + '/test_path', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.status !== 200) {
-      throw new Error(`Failed to POST event: ${res.status}`);
-    }
-  }
-
-  async function createTestClient(lastMsgId = '0') {
-    const client = new StacksEventStream({
-      redisUrl: ENV.REDIS_URL,
-      eventStreamType: StacksEventStreamType.all,
-      lastMessageId: lastMsgId,
-      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
-      appName: 'snp-client-test',
-    });
-    await client.connect({ waitForReady: true });
-    return client;
-  }
-
   test('Client stalls for MAX_IDLE_TIME_MS during pg backfill', async () => {
     const lastDbMsg = await db.getLastMessage();
 
@@ -75,7 +52,7 @@ describe('Backfill tests', () => {
     ENV.DB_MSG_BATCH_SIZE = 10;
     const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
     for (let i = 0; i < msgFillCount; i++) {
-      await sendTestEvent({ backfillMsgNumber: i });
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
     }
 
     let backfillHit = waiterNew<string>();
@@ -88,6 +65,7 @@ describe('Backfill tests', () => {
     const msgEvents = new EventEmitter();
     const clientStallStartedWaiter = waiterNew();
     const client = await createTestClient(lastDbMsg?.sequence_number);
+    ensureSequenceMsgOrder(client);
     client.start(async (id, _timestamp, _path, _body) => {
       msgEvents.emit('msg', id);
       if (backfillHit.isFinished) {
@@ -98,7 +76,7 @@ describe('Backfill tests', () => {
     });
 
     const msgSender = setInterval(() => {
-      void sendTestEvent({ test: 'msgPump' });
+      void sendTestEvent(eventServer, { test: 'msgPump' });
     }, 200);
 
     // Wait for the client to begin the msg ingestion stall
@@ -172,7 +150,7 @@ describe('Backfill tests', () => {
     ENV.DB_MSG_BATCH_SIZE = 10;
     const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 2;
     for (let i = 0; i < msgFillCount; i++) {
-      await sendTestEvent({ backfillMsgNumber: i });
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
     }
 
     let backfillHit = waiterNew<string>();
@@ -185,6 +163,7 @@ describe('Backfill tests', () => {
     const msgEvents = new EventEmitter();
     const clientStallStartedWaiter = waiterNew();
     const client = await createTestClient(lastDbMsg?.sequence_number);
+    ensureSequenceMsgOrder(client);
     client.start(async (id, _timestamp, _path, _body) => {
       msgEvents.emit('msg', id);
       if (backfillHit.isFinished) {
@@ -194,7 +173,7 @@ describe('Backfill tests', () => {
     });
 
     const msgSender = setInterval(() => {
-      void sendTestEvent({ test: 'msgPump' });
+      void sendTestEvent(eventServer, { test: 'msgPump' });
     }, 200);
 
     // Wait for the client to begin the msg ingestion stall
@@ -225,7 +204,7 @@ describe('Backfill tests', () => {
 
     // Queue up over MAX_MSG_LAG messages to force the client to be pruned
     for (let i = 0; i < ENV.MAX_MSG_LAG * 3; i++) {
-      await sendTestEvent({ laggingMsgNumber: i });
+      await sendTestEvent(eventServer, { laggingMsgNumber: i });
     }
 
     await clientPruned;

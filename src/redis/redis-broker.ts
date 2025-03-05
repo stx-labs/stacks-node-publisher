@@ -298,14 +298,16 @@ export class RedisBroker {
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
           });
           dedicatedClient.on('error', (err: Error) => {
-            logger.error(err, `Redis error on dedicated client connection for client`);
+            if (!this.abortController.signal.aborted) {
+              logger.error(err, `Redis error on dedicated client connection for client`);
+            }
           });
           void this.handleClientConnection(dedicatedClient, clientId, lastMessageId, logger)
             .catch(async (error: unknown) => {
               error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               if ((error as Error).message?.includes('NOGROUP')) {
                 logger.warn(error as Error, `Consumer group not found for client (likely pruned)`);
-              } else {
+              } else if (!this.abortController.signal.aborted) {
                 logger.error(error as Error, `Error processing msgs for consumer stream`);
               }
               const groupKey = this.getClientGlobalStreamGroupKey(clientId);
@@ -318,14 +320,18 @@ export class RedisBroker {
                 .del(clientStreamKey)
                 .exec()
                 .catch((error: unknown) => {
-                  error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-                  logger.warn(error, `Error cleaning up client connection`);
+                  if (!this.abortController.signal.aborted) {
+                    error = unwrapRedisMultiErrorReply(error as Error) ?? error;
+                    logger.warn(error, `Error cleaning up client connection`);
+                  }
                 });
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
               dedicatedClient.quit().catch((error: unknown) => {
-                logger.warn(error as Error, `Error closing dedicated client connection`);
+                if (!this.abortController.signal.aborted) {
+                  logger.warn(error as Error, `Error closing dedicated client connection`);
+                }
               });
             });
         }

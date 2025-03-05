@@ -5,10 +5,10 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
 import * as Docker from 'dockerode';
 import { waiter } from '@hirosystems/api-toolkit';
 import { sleep } from '../../src/helpers';
+import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
 
 describe('Redis interrupts', () => {
   let db: PgStore;
@@ -55,34 +55,10 @@ describe('Redis interrupts', () => {
     await redisDockerContainer.restart();
   });
 
-  async function sendTestEvent(body: any = { test: 1 }) {
-    const res = await fetch(eventServer.url + '/test_path', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.status !== 200) {
-      throw new Error(`Failed to POST event: ${res.status}`);
-    }
-    return res;
-  }
-
-  async function createTestClient(lastMsgId = '0') {
-    const client = new StacksEventStream({
-      redisUrl: ENV.REDIS_URL,
-      eventStreamType: StacksEventStreamType.all,
-      lastMessageId: lastMsgId,
-      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
-      appName: 'snp-client-test',
-    });
-    await client.connect({ waitForReady: true });
-    return client;
-  }
-
   test('events-observer POST success when redis unavailable', async () => {
     await redisDockerContainer.stop();
     const testEventBody = { test: 'redis_stopped' };
-    const postEventResult = await sendTestEvent(testEventBody);
+    const postEventResult = await sendTestEvent(eventServer, testEventBody);
     expect(postEventResult.status).toBe(200);
     const lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
@@ -92,6 +68,7 @@ describe('Redis interrupts', () => {
   test('client connect succeeds once redis is available', async () => {
     const lastDbMsg = await db.getLastMessage();
     const client = await createTestClient(lastDbMsg?.sequence_number);
+    ensureSequenceMsgOrder(client);
     const testMsg1 = { test: randomUUID() };
     let lastMsgWaiter = waiter<any>();
     client.start((_id, _timestamp, _path, body) => {
@@ -100,7 +77,7 @@ describe('Redis interrupts', () => {
     });
 
     // Client receives msg when redis is available
-    await sendTestEvent(testMsg1);
+    await sendTestEvent(eventServer, testMsg1);
     let lastMsg = await lastMsgWaiter;
     lastMsgWaiter = waiter();
     expect(lastMsg).toEqual(testMsg1);
@@ -108,7 +85,7 @@ describe('Redis interrupts', () => {
     // Client does not receive msg when redis is unavailable
     await redisDockerContainer.stop();
     const testMsg2 = { test: randomUUID() };
-    await sendTestEvent(testMsg2);
+    await sendTestEvent(eventServer, testMsg2);
     expect(client.connectionStatus).toBe('reconnecting');
     await sleep(100);
     expect(lastMsgWaiter.isFinished).toBe(false);

@@ -20,7 +20,7 @@ export class StacksEventStream {
   readonly client: RedisClientType;
   private readonly eventStreamType: StacksEventStreamType;
   clientId = randomUUID();
-  private lastMessageId: string;
+  lastMessageId: string;
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
 
@@ -37,6 +37,7 @@ export class StacksEventStream {
 
   readonly events = new EventEmitter<{
     redisConsumerGroupDestroyed: [];
+    msgReceived: [{ id: string }];
   }>();
 
   constructor(args: {
@@ -195,6 +196,8 @@ export class StacksEventStream {
             JSON.parse(item.message.body)
           );
           this.lastMessageId = item.id;
+
+          this.events.emit('msgReceived', { id: item.id });
 
           await this.client
             .multi()

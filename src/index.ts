@@ -59,7 +59,14 @@ async function initApp() {
       const dbResult = await db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
       // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
       // to redis is not critical and we don't want to slow down the event observer server & pg writes.
-      // For now, if this fails then we throw.
+      // For example, even if redis takes a few hundreds milliseconds, we don't want to block the
+      // stack-node(s) for any longer than absolutely necessary. This especially important during genesis
+      // syncs and also for the high-precision stackerdb_chunk event timestamps used by clients like
+      // the signer-metrics-api.
+      // The promise queue should be limited to 1 concurrency to ensure the order of events is maintained,
+      // and should have a reasonable max queue length to prevent memory exhaustion. If the limit is reached
+      // then the redis write will just be skipped for this message, and the redis-broker layer already knows
+      // how to handle this case (e.g. detecting msg gaps and backfilling from postgres).
       await redisBroker.addStacksMessage({
         timestamp: dbResult.timestamp,
         sequenceNumber: dbResult.sequence_number,

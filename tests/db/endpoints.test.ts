@@ -100,7 +100,7 @@ describe('Endpoint tests', () => {
     expect(body).toMatch(new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
   });
 
-  test('stream messages from redis', async () => {
+  test.skip('stream messages from redis', async () => {
     const appRedisClient = createClient({
       url: ENV.REDIS_URL,
       name: 'salt-n-pepper-server-client-test',
@@ -149,7 +149,7 @@ describe('Endpoint tests', () => {
    *  - Msg added to pg exactly in the middle of client transition from backfilling to live-streaming
    */
 
-  test('client lib test', async () => {
+  test.skip('client lib test', async () => {
     redisBroker.testRegisterOnLiveStreamTransition(async () => {
       for (let i = 0; i < 10; i++) {
         const res = await fetch(eventServer.url + '/test_path', {

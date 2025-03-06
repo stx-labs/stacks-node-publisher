@@ -5,7 +5,12 @@ import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { sleep, waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
-import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
+import {
+  createTestClient,
+  ensureSequenceMsgOrder,
+  redisFlushAllWithPrefix,
+  sendTestEvent,
+} from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
 
@@ -550,7 +555,7 @@ describe('Backfill tests', () => {
 
     const backfillHit = waiterNew();
     const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
-      await redisBroker.client.flushAll();
+      await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
       backfillHit.finish();
       onBackfill.unregister();
       return Promise.resolve();

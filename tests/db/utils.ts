@@ -1,6 +1,7 @@
 import { StacksEventStream, StacksEventStreamType } from '../../client/src';
 import { ENV } from '../../src/env';
 import { EventObserverServer } from '../../src/event-observer/event-server';
+import { RedisClient } from '../../src/redis/redis-types';
 
 /**  Ensure that all msgs are received in order and with no gaps. */
 export function ensureSequenceMsgOrder(client: StacksEventStream) {
@@ -34,4 +35,10 @@ export async function createTestClient(lastMsgId = '0') {
   });
   await client.connect({ waitForReady: true });
   return client;
+}
+
+export async function redisFlushAllWithPrefix(prefix: string, client: RedisClient) {
+  const keys = await client.keys(`${prefix}*`);
+  const result = await client.del(keys);
+  expect(result).toBe(keys.length);
 }

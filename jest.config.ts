@@ -5,7 +5,7 @@ const jestConfig: JestConfigWithTsJest = {
   testEnvironment: 'node',
   coverageProvider: 'v8',
   collectCoverageFrom: ['src/**/*.ts', 'migrations/*.ts'],
-  testTimeout: 600000,
+  testTimeout: 60000,
   projects: [
     {
       transform,

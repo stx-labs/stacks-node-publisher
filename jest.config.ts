@@ -6,6 +6,7 @@ const jestConfig: JestConfigWithTsJest = {
   coverageProvider: 'v8',
   collectCoverageFrom: ['src/**/*.ts', 'migrations/*.ts'],
   testTimeout: 60000,
+  maxWorkers: 1,
   projects: [
     {
       transform,

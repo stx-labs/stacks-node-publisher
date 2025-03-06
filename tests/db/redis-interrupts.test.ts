@@ -7,8 +7,9 @@ import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
 import { waiter } from '@hirosystems/api-toolkit';
-import { sleep } from '../../src/helpers';
+import { sleep, waiterNew } from '../../src/helpers';
 import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
+import { once } from 'node:events';
 
 describe('Redis interrupts', () => {
   let db: PgStore;
@@ -53,6 +54,11 @@ describe('Redis interrupts', () => {
 
   beforeEach(async () => {
     await redisDockerContainer.restart();
+    await Promise.all([
+      once(redisBroker.client, 'ready'),
+      once(redisBroker.ingestionClient, 'ready'),
+      once(redisBroker.listeningClient, 'ready'),
+    ]);
   });
 
   test('events-observer POST success when redis unavailable', async () => {
@@ -116,4 +122,110 @@ describe('Redis interrupts', () => {
     console.log('here');
   });
   */
+
+  test('Redis ingestion client connection is unavailable during event insertion', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    ENV.MAX_MSG_LAG = 100;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    const client = await createTestClient(lastDbMsg?.sequence_number);
+    ensureSequenceMsgOrder(client);
+
+    const addRedisMsgThrow = waiterNew<{ msgId: string }>();
+    const onRedisAddMsg = redisBroker._testRegisterOnAddStacksMsg(async msgId => {
+      onRedisAddMsg.unregister();
+      addRedisMsgThrow.finish({ msgId });
+      await Promise.resolve();
+      throw new Error('test redis add msg error');
+    });
+
+    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    client.start(async (_id, _timestamp, _path, _body) => {
+      if (!firstMsgsReceived.isFinished) {
+        // Grab the original client ID before the client reconnects
+        firstMsgsReceived.finish({ originalClientId: client.clientId });
+      }
+      return Promise.resolve();
+    });
+
+    // Process all msgs
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+    });
+
+    const throwMsgPayload = { test: 'throw_on_this_msg' };
+    await sendTestEvent(eventServer, throwMsgPayload);
+
+    // Wait for redis server data to be wiped during the backfilling process
+    const thrownMsgId = await addRedisMsgThrow;
+
+    // Check that the msg we threw on during redis ingestion is what we expect
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    expect(lastDbMsg).toMatchObject({
+      sequence_number: thrownMsgId.msgId,
+      content: JSON.stringify(throwMsgPayload),
+    });
+
+    // We expect the client to not have received the message we threw on (simulating redis ingestion failure)
+    expect(parseInt(client.lastMessageId.split('-')[0])).toBeLessThan(
+      parseInt(thrownMsgId.msgId.split('-')[0])
+    );
+
+    // Send the next event which should trigger gap detection in the redis-broker ingestion,
+    // and cause the client to reconnect to backfill missing messages.
+    await sendTestEvent(eventServer, { test: 'post_throw_msg' });
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+
+    // Ensure client was able to reconnect and receive the missing messages
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    // The original client consumer redis stream should be pruned
+    const { originalClientId } = await firstMsgsReceived;
+    const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
+    const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
+    expect(clientStreamExists).toBe(0);
+
+    // The original client consumer group on the global stream should be pruned
+    const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
+    const globalStreamGroupExists = await redisBroker.client
+      .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      .then(
+        () => {
+          throw new Error('Expected xInfoConsumers to reject');
+        },
+        (error: Error) => {
+          if (error?.message.includes('NOGROUP')) {
+            return false;
+          } else {
+            throw error;
+          }
+        }
+      );
+    expect(globalStreamGroupExists).toBe(false);
+
+    await client.stop();
+    ENV.reload();
+  });
 });

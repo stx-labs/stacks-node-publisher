@@ -54,6 +54,12 @@ export class RedisBroker {
     return { unregister: () => this._testOnPgBackfillLoop.delete(cb) };
   }
 
+  _testOnAddStacksMsg = new Set<(msgId: string) => Promise<void>>();
+  _testRegisterOnAddStacksMsg(cb: (msgId: string) => Promise<void>) {
+    this._testOnAddStacksMsg.add(cb);
+    return { unregister: () => this._testOnAddStacksMsg.delete(cb) };
+  }
+
   constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string; db: PgStore }) {
     this.db = args.db;
     this.redisStreamKeyPrefix = args.redisStreamKeyPrefix;
@@ -183,6 +189,9 @@ export class RedisBroker {
     eventBody: string;
   }) {
     try {
+      for (const cb of this._testOnAddStacksMsg) {
+        await cb(args.sequenceNumber);
+      }
       await this.handleMsg(args);
     } catch (error) {
       this.logger.error(error, 'Failed to add message to Redis');

@@ -28,6 +28,7 @@ export class RedisBroker {
     idleConsumerPruned: [{ clientId: string }];
     laggingConsumerPruned: [{ clientId: string }];
     perConsumerClientCreated: [{ clientId: string }];
+    ingestionMsgGapDetected: [];
   }>();
 
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
@@ -235,6 +236,7 @@ export class RedisBroker {
       if (streamInfo && streamInfo.groups > 0 && streamInfo.lastEntry) {
         const lastEntryId = parseInt(streamInfo.lastEntry.id.split('-')[0]);
         if (lastEntryId + 1 < parseInt(args.sequenceNumber)) {
+          this.events.emit('ingestionMsgGapDetected');
           this.logger.warn(
             `Detected gap in global stream, lastEntryId=${lastEntryId}, sequenceNumber=${args.sequenceNumber}`
           );

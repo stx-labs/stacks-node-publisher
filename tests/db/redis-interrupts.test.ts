@@ -185,11 +185,16 @@ describe('Redis interrupts', () => {
 
     // Send the next event which should trigger gap detection in the redis-broker ingestion,
     // and cause the client to reconnect to backfill missing messages.
+    let msgGapDetected = false;
+    redisBroker.events.once('ingestionMsgGapDetected', () => {
+      msgGapDetected = true;
+    });
     await sendTestEvent(eventServer, { test: 'post_throw_msg' });
-    lastDbMsg = await db.getLastMessage();
-    assert(lastDbMsg);
+    expect(msgGapDetected).toBe(true);
 
     // Ensure client was able to reconnect and receive the missing messages
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
     await new Promise<void>(resolve => {
       client.events.on('msgReceived', ({ id }) => {
         if (id.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {

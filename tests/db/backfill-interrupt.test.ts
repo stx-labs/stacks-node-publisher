@@ -56,7 +56,7 @@ describe('Backfill tests', () => {
     }
 
     let backfillHit = waiterNew<string>();
-    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async msgId => {
+    const onBackfill = redisBroker._testHooks.onPgBackfillLoop.register(async msgId => {
       backfillHit.finish(msgId);
       onBackfill.unregister();
       return Promise.resolve();
@@ -173,7 +173,7 @@ describe('Backfill tests', () => {
     }
 
     let backfillHit = waiterNew<string>();
-    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async msgId => {
+    const onBackfill = redisBroker._testHooks.onPgBackfillLoop.register(async msgId => {
       backfillHit.finish(msgId);
       onBackfill.unregister();
       return Promise.resolve();
@@ -281,7 +281,7 @@ describe('Backfill tests', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     const backfillHit = waiterNew();
-    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
+    const onBackfill = redisBroker._testHooks.onPgBackfillLoop.register(async _msgId => {
       try {
         const clientRedisConnectionID = await client.client.clientId();
         const clientKillCount = await redisBroker.client.clientKill({
@@ -369,7 +369,7 @@ describe('Backfill tests', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     const backfillHit = waiterNew();
-    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
+    const onBackfill = redisBroker._testHooks.onPgBackfillLoop.register(async _msgId => {
       const perConsumerClient = [...redisBroker.perConsumerClients].find(
         ([_, entry]) => entry.clientId === client.clientId
       )?.[0];
@@ -468,7 +468,7 @@ describe('Backfill tests', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     const backfillHit = waiterNew();
-    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
+    const onBackfill = redisBroker._testHooks.onPgBackfillLoop.register(async _msgId => {
       const redisBrokerGlobalClientIds = await Promise.all(
         [redisBroker.client, redisBroker.listeningClient, redisBroker.ingestionClient].map(client =>
           client.clientId()
@@ -571,7 +571,7 @@ describe('Backfill tests', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     const backfillHit = waiterNew();
-    const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
+    const onBackfill = redisBroker._testHooks.onPgBackfillLoop.register(async _msgId => {
       await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
       backfillHit.finish();
       onBackfill.unregister();
@@ -664,7 +664,7 @@ describe('Backfill tests', () => {
 
     const onTransitionToLive = waiterNew();
     const transitionMsgPayload = { msg: 'msg added during backfill to livestream transition' };
-    const hook = redisBroker._testRegisterOnLiveStreamTransition(async () => {
+    const hook = redisBroker._testHooks.onLiveStreamTransition.register(async () => {
       await sendTestEvent(eventServer, transitionMsgPayload);
       onTransitionToLive.finish();
       hook.unregister();

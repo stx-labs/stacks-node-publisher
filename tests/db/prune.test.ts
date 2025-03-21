@@ -72,7 +72,7 @@ describe('Prune tests', () => {
     expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
     await client.stop();
 
-    const testFn = redisBroker._testRegisterOnTrimGlobalStreamGetGroups(async () => {
+    const testFn = redisBroker._testHooks.onTrimGlobalStreamGetGroups.register(async () => {
       // This is called in the middle of the trim operation, add a new consumer
       const newClient = await createTestClient();
       // Wait for the client to receive a message so that we know its group is registered on the server

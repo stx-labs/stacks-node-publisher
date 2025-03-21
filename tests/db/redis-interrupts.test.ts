@@ -131,7 +131,7 @@ describe('Redis interrupts', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     const addRedisMsgThrow = waiterNew<{ msgId: string }>();
-    const onRedisAddMsg = redisBroker._testRegisterOnAddStacksMsg(async msgId => {
+    const onRedisAddMsg = redisBroker._testHooks.onAddStacksMsg.register(async msgId => {
       onRedisAddMsg.unregister();
       addRedisMsgThrow.finish({ msgId });
       await Promise.resolve();
@@ -245,7 +245,7 @@ describe('Redis interrupts', () => {
 
     // right after pg data is inserted, wipe redis data before inserting into redis
     const onRedisWiped = waiterNew<{ msgId: string }>();
-    const onRedisAddMsg = redisBroker._testRegisterOnAddStacksMsg(async msgId => {
+    const onRedisAddMsg = redisBroker._testHooks.onAddStacksMsg.register(async msgId => {
       onRedisAddMsg.unregister();
       await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
       onRedisWiped.finish({ msgId });

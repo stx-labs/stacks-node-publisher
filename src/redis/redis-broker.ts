@@ -2,7 +2,7 @@ import { ClientClosedError, createClient, WatchError } from 'redis';
 import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
-import { sleep } from '../helpers';
+import { createTestHook, sleep } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
@@ -32,35 +32,13 @@ export class RedisBroker {
     ingestionToEmptyRedisDb: [];
   }>();
 
-  _testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
-  _testRegisterOnLiveStreamTransition(cb: () => Promise<void>) {
-    this._testOnLiveStreamTransitionCbs.add(cb);
-    return { unregister: () => this._testOnLiveStreamTransitionCbs.delete(cb) };
-  }
-
-  _testRegisterOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
-  _testOnLiveStreamDrained(cb: () => Promise<void>) {
-    this._testRegisterOnLiveStreamTransitionCbs.add(cb);
-    return { unregister: () => this._testRegisterOnLiveStreamTransitionCbs.delete(cb) };
-  }
-
-  _testOnTrimGlobalStreamGetGroups = new Set<() => Promise<void>>();
-  _testRegisterOnTrimGlobalStreamGetGroups(cb: () => Promise<void>) {
-    this._testOnTrimGlobalStreamGetGroups.add(cb);
-    return { unregister: () => this._testOnTrimGlobalStreamGetGroups.delete(cb) };
-  }
-
-  _testOnPgBackfillLoop = new Set<(msgId: string) => Promise<void>>();
-  _testRegisterOnPgBackfillLoop(cb: (msgId: string) => Promise<void>) {
-    this._testOnPgBackfillLoop.add(cb);
-    return { unregister: () => this._testOnPgBackfillLoop.delete(cb) };
-  }
-
-  _testOnAddStacksMsg = new Set<(msgId: string) => Promise<void>>();
-  _testRegisterOnAddStacksMsg(cb: (msgId: string) => Promise<void>) {
-    this._testOnAddStacksMsg.add(cb);
-    return { unregister: () => this._testOnAddStacksMsg.delete(cb) };
-  }
+  _testHooks = {
+    onLiveStreamTransition: createTestHook<() => Promise<void>>(),
+    onLiveStreamDrained: createTestHook<() => Promise<void>>(),
+    onTrimGlobalStreamGetGroups: createTestHook<() => Promise<void>>(),
+    onPgBackfillLoop: createTestHook<(msgId: string) => Promise<void>>(),
+    onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
+  };
 
   constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string; db: PgStore }) {
     this.db = args.db;
@@ -193,7 +171,7 @@ export class RedisBroker {
     eventBody: string;
   }) {
     try {
-      for (const cb of this._testOnAddStacksMsg) {
+      for (const cb of this._testHooks.onAddStacksMsg) {
         await cb(args.sequenceNumber);
       }
       await this.handleMsg(args);
@@ -469,7 +447,7 @@ export class RedisBroker {
       );
 
       if (dbResults.length > 0) {
-        for (const cb of this._testOnPgBackfillLoop) {
+        for (const cb of this._testHooks.onPgBackfillLoop) {
           // Only used by tests
           await cb(dbResults[0].sequence_number);
         }
@@ -494,7 +472,7 @@ export class RedisBroker {
       }
     }
 
-    for (const cb of this._testOnLiveStreamTransitionCbs) {
+    for (const cb of this._testHooks.onLiveStreamTransition) {
       // Only used by tests, performs xAdd on the global stream
       await cb();
     }
@@ -552,7 +530,7 @@ export class RedisBroker {
           }
         }
       } else {
-        for (const cb of this._testRegisterOnLiveStreamTransitionCbs) {
+        for (const cb of this._testHooks.onLiveStreamTransition) {
           // Only used by tests, performs xAdd on the global stream
           await cb();
         }
@@ -586,7 +564,7 @@ export class RedisBroker {
           }
         }
 
-        for (const testFn of this._testOnTrimGlobalStreamGetGroups) {
+        for (const testFn of this._testHooks.onTrimGlobalStreamGetGroups) {
           await testFn();
         }
 

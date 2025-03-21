@@ -94,3 +94,16 @@ export function waiterNew<T = void>(): Waiter<T> {
   };
   return Object.assign(promise, completer);
 }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createTestHook<T extends (...args: any[]) => Promise<void>>() {
+  const callbacks = new Set<T>();
+
+  const register = (cb: T) => {
+    callbacks.add(cb);
+    return {
+      unregister: () => callbacks.delete(cb),
+    };
+  };
+  return Object.assign(callbacks, { register });
+}

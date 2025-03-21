@@ -9,7 +9,7 @@
     "build:tests": "tsc -p tsconfig.json --noEmit",
     "start": "node ./dist/src/index.js",
     "start-ts": "ts-node ./src/index.ts",
-    "test": "jest",
+    "test": "jest --runInBand --bail",
     "test:unit": "jest --selectProjects unit-tests",
     "test:db": "jest --selectProjects db-tests",
     "testenv:run": "docker compose -f docker/docker-compose.dev.postgres.yml -f docker/docker-compose.dev.redis.yml up --force-recreate -V",

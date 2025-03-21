@@ -1,11 +1,16 @@
 import { createDefaultPreset, type JestConfigWithTsJest } from 'ts-jest';
 
+const isDebugging = process.env.NODE_OPTIONS?.includes('--inspect');
+const debugTestTimeout = 60_000;
+const defaultTestTimeout = 10_000;
+const testTimeout = isDebugging ? debugTestTimeout : defaultTestTimeout;
+
 const transform = { ...createDefaultPreset().transform };
 const jestConfig: JestConfigWithTsJest = {
   testEnvironment: 'node',
   coverageProvider: 'v8',
   collectCoverageFrom: ['src/**/*.ts', 'migrations/*.ts'],
-  testTimeout: 60000,
+  testTimeout: testTimeout,
   maxWorkers: 1,
   projects: [
     {

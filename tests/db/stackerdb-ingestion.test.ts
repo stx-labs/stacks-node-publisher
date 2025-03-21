@@ -35,7 +35,11 @@ describe('Stackerdb ingestion tests', () => {
       input: fs.createReadStream(payloadDumpFile).pipe(zlib.createGunzip()),
       crlfDelay: Infinity,
     });
-    const spyInfoLog = jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}); // Suppress noisy logs during bulk insertion test
+    // Suppress noisy logs during bulk insertion test
+    const spyInfoLogs = [
+      jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}),
+      jest.spyOn(redisBroker.logger, 'info').mockImplementation(() => {}),
+    ];
     for await (const line of rl) {
       const [_id, timestamp, path, payload] = line.split('\t');
       // use fetch to POST the payload to the event server
@@ -49,8 +53,8 @@ describe('Stackerdb ingestion tests', () => {
       }
     }
     rl.close();
-    spyInfoLog.mockRestore();
-  });
+    spyInfoLogs.forEach(spy => spy.mockRestore());
+  }, 60_000);
 
   afterAll(async () => {
     await closeTestClients();

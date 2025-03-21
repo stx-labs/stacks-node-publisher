@@ -156,6 +156,9 @@ describe('Redis interrupts', () => {
           resolve();
         }
       });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
     });
 
     const throwMsgPayload = { test: 'throw_on_this_msg' };
@@ -266,6 +269,9 @@ describe('Redis interrupts', () => {
           resolve();
         }
       });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
     });
 
     const onMsgAddedToEmptyRedisDb = waiterNew();

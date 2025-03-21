@@ -32,16 +32,16 @@ export class RedisBroker {
     ingestionToEmptyRedisDb: [];
   }>();
 
-  testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
-  testRegisterOnLiveStreamTransition(cb: () => Promise<void>) {
-    this.testOnLiveStreamTransitionCbs.add(cb);
-    return { unregister: () => this.testOnLiveStreamTransitionCbs.delete(cb) };
+  _testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
+  _testRegisterOnLiveStreamTransition(cb: () => Promise<void>) {
+    this._testOnLiveStreamTransitionCbs.add(cb);
+    return { unregister: () => this._testOnLiveStreamTransitionCbs.delete(cb) };
   }
 
-  testRegisterOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
-  testOnLiveStreamDrained(cb: () => Promise<void>) {
-    this.testRegisterOnLiveStreamTransitionCbs.add(cb);
-    return { unregister: () => this.testRegisterOnLiveStreamTransitionCbs.delete(cb) };
+  _testRegisterOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
+  _testOnLiveStreamDrained(cb: () => Promise<void>) {
+    this._testRegisterOnLiveStreamTransitionCbs.add(cb);
+    return { unregister: () => this._testRegisterOnLiveStreamTransitionCbs.delete(cb) };
   }
 
   _testOnTrimGlobalStreamGetGroups = new Set<() => Promise<void>>();
@@ -494,7 +494,7 @@ export class RedisBroker {
       }
     }
 
-    for (const cb of this.testOnLiveStreamTransitionCbs) {
+    for (const cb of this._testOnLiveStreamTransitionCbs) {
       // Only used by tests, performs xAdd on the global stream
       await cb();
     }
@@ -552,7 +552,7 @@ export class RedisBroker {
           }
         }
       } else {
-        for (const cb of this.testRegisterOnLiveStreamTransitionCbs) {
+        for (const cb of this._testRegisterOnLiveStreamTransitionCbs) {
           // Only used by tests, performs xAdd on the global stream
           await cb();
         }

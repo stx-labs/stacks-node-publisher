@@ -319,6 +319,9 @@ describe('Backfill tests', () => {
           resolve();
         }
       });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
     });
 
     // Send over ENV.MAX_MSG_LAG messages to force the old and now disconnected stream to be pruned
@@ -415,6 +418,9 @@ describe('Backfill tests', () => {
           resolve();
         }
       });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
     });
 
     // Send over ENV.MAX_MSG_LAG messages to force the old and now disconnected stream to be pruned
@@ -506,6 +512,9 @@ describe('Backfill tests', () => {
           resolve();
         }
       });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
     });
 
     // Send over new messages to verify client is still receiving them
@@ -609,6 +618,9 @@ describe('Backfill tests', () => {
           resolve();
         }
       });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        resolve();
+      }
     });
 
     // The original client consumer redis stream should be pruned

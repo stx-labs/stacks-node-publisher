@@ -139,7 +139,7 @@ describe('Endpoint tests', () => {
    */
 
   test.skip('client lib test', async () => {
-    redisBroker.testRegisterOnLiveStreamTransition(async () => {
+    redisBroker._testRegisterOnLiveStreamTransition(async () => {
       for (let i = 0; i < 10; i++) {
         const res = await fetch(eventServer.url + '/test_path', {
           method: 'POST',
@@ -152,7 +152,7 @@ describe('Endpoint tests', () => {
       }
     });
 
-    const streamDrainedCb = redisBroker.testOnLiveStreamDrained(async () => {
+    const streamDrainedCb = redisBroker._testOnLiveStreamDrained(async () => {
       for (let i = 0; i < 10; i++) {
         const res = await fetch(eventServer.url + '/test_path', {
           method: 'POST',

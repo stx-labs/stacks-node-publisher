@@ -1,3 +1,9 @@
+## [1.0.3](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.2...v1.0.3) (2025-02-21)
+
+### Bug Fixes
+
+* use original timestamps from tsvs ([#11](https://github.com/hirosystems/salt-n-pepper/issues/11)) ([4575d6b](https://github.com/hirosystems/salt-n-pepper/commit/4575d6b81b9d4bfee919cb0a74aa618bec597768))
+
 ## [1.0.2](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.1...v1.0.2) (2025-01-09)
 
 ### Bug Fixes

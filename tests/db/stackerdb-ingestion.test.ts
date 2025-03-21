@@ -26,18 +26,7 @@ describe('Stackerdb ingestion tests', () => {
     await redisBroker.connect({ waitForReady: true });
 
     const promRegistry = new Registry();
-    eventServer = new EventObserverServer({
-      promRegistry: promRegistry,
-      eventMessageHandler: async (eventPath, eventBody, httpReceiveTimestamp) => {
-        const dbResult = await db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
-        await redisBroker.addStacksMessage({
-          timestamp: dbResult.timestamp,
-          sequenceNumber: dbResult.sequence_number,
-          eventPath,
-          eventBody,
-        });
-      },
-    });
+    eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
     await eventServer.start({ port: 0, host: '127.0.0.1' });
 
     // insert stacks-node events dump

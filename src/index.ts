@@ -51,30 +51,7 @@ async function initApp() {
   await redisBroker.connect({ waitForReady: false });
 
   // Setup stacks-node http event observer http server
-  const eventServer = new EventObserverServer({
-    promRegistry,
-    eventMessageHandler: async (eventPath, eventBody, httpReceiveTimestamp) => {
-      // Storing the event in postgres in critical, if this fails then throw so the observer server
-      // returns a non-200 and the stacks-node will retry the event POST.
-      const dbResult = await db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
-      // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
-      // to redis is not critical and we don't want to slow down the event observer server & pg writes.
-      // For example, even if redis takes a few hundreds milliseconds, we don't want to block the
-      // stack-node(s) for any longer than absolutely necessary. This especially important during genesis
-      // syncs and also for the high-precision stackerdb_chunk event timestamps used by clients like
-      // the signer-metrics-api.
-      // The promise queue should be limited to 1 concurrency to ensure the order of events is maintained,
-      // and should have a reasonable max queue length to prevent memory exhaustion. If the limit is reached
-      // then the redis write will just be skipped for this message, and the redis-broker layer already knows
-      // how to handle this case (e.g. detecting msg gaps and backfilling from postgres).
-      await redisBroker.addStacksMessage({
-        timestamp: dbResult.timestamp,
-        sequenceNumber: dbResult.sequence_number,
-        eventPath,
-        eventBody,
-      });
-    },
-  });
+  const eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
   registerShutdownConfig({
     name: 'Event observer server',
     forceKillable: false,

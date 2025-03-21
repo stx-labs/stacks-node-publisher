@@ -29,6 +29,7 @@ export class RedisBroker {
     laggingConsumerPruned: [{ clientId: string }];
     perConsumerClientCreated: [{ clientId: string }];
     ingestionMsgGapDetected: [];
+    ingestionToEmptyRedisDb: [];
   }>();
 
   testOnLiveStreamTransitionCbs = new Set<() => Promise<void>>();
@@ -231,6 +232,11 @@ export class RedisBroker {
           }
           throw error;
         });
+
+      if (!streamInfo || !streamInfo.groups) {
+        this.events.emit('ingestionToEmptyRedisDb');
+        this.logger.info(`Message being added to an empty redis server, msgId=${messageId}`);
+      }
 
       // If there are groups (consumers) on the stream and the stream isn't new/empty, then check for gaps.
       if (streamInfo && streamInfo.groups > 0 && streamInfo.lastEntry) {

@@ -649,4 +649,74 @@ describe('Backfill tests', () => {
     await client.stop();
     ENV.reload();
   });
+
+  test('Msg ingested to pg exactly in the middle of client transition from backfilling to live-streaming', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    ENV.MAX_MSG_LAG = 100;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    const client = await createTestClient(lastDbMsg?.sequence_number);
+
+    const onTransitionToLive = waiterNew();
+    const transitionMsgPayload = { msg: 'msg added during backfill to livestream transition' };
+    const hook = redisBroker._testRegisterOnLiveStreamTransition(async () => {
+      await sendTestEvent(eventServer, transitionMsgPayload);
+      onTransitionToLive.finish();
+      hook.unregister();
+    });
+
+    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const onTransitionMsgReceived = waiterNew();
+    client.start(async (_id, _timestamp, _path, body) => {
+      if (!firstMsgsReceived.isFinished) {
+        // Grab the original client ID before the client reconnects
+        firstMsgsReceived.finish({ originalClientId: client.clientId });
+      }
+      if (!onTransitionMsgReceived.isFinished) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        if (body.msg === transitionMsgPayload.msg) {
+          onTransitionMsgReceived.finish();
+        }
+      }
+      return Promise.resolve();
+    });
+
+    // Wait for first msg received
+    const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
+
+    // Wait for msg to be ingested during client transition to live streaming
+    await withTimeout(onTransitionToLive);
+
+    // Ensure client receives the msg ingested during transition to live streaming
+    await withTimeout(onTransitionMsgReceived);
+
+    // ClientID should be the same as from when first msg received (no resets)
+    const { originalClientId } = onFirstMsgsReceived;
+    expect(client.clientId).toEqual(originalClientId);
+
+    // Send over new messages to verify client is still receiving them
+    for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
+      await sendTestEvent(eventServer, { finalMsgsNumber: i });
+    }
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    await client.stop();
+    ENV.reload();
+  });
 });

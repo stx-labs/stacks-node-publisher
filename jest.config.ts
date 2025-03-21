@@ -9,7 +9,8 @@ process.env.JEST_TEST_TIMEOUT = testTimeout.toString();
 const transform = { ...createDefaultPreset().transform };
 const jestConfig: JestConfigWithTsJest = {
   testEnvironment: 'node',
-  coverageProvider: 'v8',
+  // The v8 coverage provider is inaccurate in this repo
+  // coverageProvider: 'v8',
   collectCoverageFrom: ['src/**/*.ts', 'migrations/*.ts'],
   testTimeout: testTimeout,
   maxWorkers: 1,

@@ -9,11 +9,10 @@ import * as Docker from 'dockerode';
 import { waiter } from '@hirosystems/api-toolkit';
 import { sleep, waiterNew } from '../../src/helpers';
 import {
+  closeTestClients,
   createTestClient,
-  ensureSequenceMsgOrder,
   redisFlushAllWithPrefix,
   sendTestEvent,
-  testClients,
 } from './utils';
 import { once } from 'node:events';
 
@@ -42,10 +41,7 @@ describe('Redis interrupts', () => {
   });
 
   afterAll(async () => {
-    for (const testClient of testClients) {
-      await testClient.stop();
-    }
-    testClients.clear();
+    await closeTestClients();
     await eventServer.close();
     await db.close();
     await redisBroker.close();
@@ -73,7 +69,6 @@ describe('Redis interrupts', () => {
   test('client connect succeeds once redis is available', async () => {
     const lastDbMsg = await db.getLastMessage();
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
     const testMsg1 = { test: randomUUID() };
     let lastMsgWaiter = waiter<any>();
     client.start((_id, _timestamp, _path, body) => {
@@ -133,7 +128,6 @@ describe('Redis interrupts', () => {
     }
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
 
     const addRedisMsgThrow = waiterNew<{ msgId: string }>();
     const onRedisAddMsg = redisBroker._testRegisterOnAddStacksMsg(async msgId => {

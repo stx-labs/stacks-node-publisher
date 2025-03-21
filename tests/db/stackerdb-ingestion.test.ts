@@ -7,8 +7,8 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
 import { waiter } from '@hirosystems/api-toolkit';
+import { closeTestClients, createTestClient, withTimeout } from './utils';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;
@@ -53,22 +53,11 @@ describe('Stackerdb ingestion tests', () => {
   });
 
   afterAll(async () => {
+    await closeTestClients();
     await eventServer.close();
     await db.close();
     await redisBroker.close();
   });
-
-  async function createTestClient(lastMsgId = '0') {
-    const client = new StacksEventStream({
-      redisUrl: ENV.REDIS_URL,
-      eventStreamType: StacksEventStreamType.all,
-      lastMessageId: lastMsgId,
-      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
-      appName: 'snp-client-test',
-    });
-    await client.connect({ waitForReady: true });
-    return client;
-  }
 
   test('stream messages', async () => {
     const lastDbMsg = await db.getLastMessage();
@@ -90,7 +79,7 @@ describe('Stackerdb ingestion tests', () => {
       return Promise.resolve();
     });
 
-    await allMsgsReceivedWaiter;
+    await withTimeout(allMsgsReceivedWaiter, 60_000);
 
     await client.stop();
   }, 60_000);

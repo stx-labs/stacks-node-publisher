@@ -3,7 +3,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { createTestClient, ensureSequenceMsgOrder, sendTestEvent, testClients } from './utils';
+import { closeTestClients, createTestClient, sendTestEvent } from './utils';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -26,10 +26,7 @@ describe('Prune tests', () => {
   });
 
   afterAll(async () => {
-    for (const testClient of testClients) {
-      await testClient.stop();
-    }
-    testClients.clear();
+    await closeTestClients();
     await eventServer.close();
     await db.close();
     await redisBroker.close();
@@ -62,7 +59,6 @@ describe('Prune tests', () => {
     expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
 
     const client = await createTestClient();
-    ensureSequenceMsgOrder(client);
 
     const lastClientMsgId = await new Promise<number>(resolve => {
       client.start(id => {

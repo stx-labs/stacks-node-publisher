@@ -4,7 +4,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { RedisClient } from '../../src/redis/redis-types';
 
 /**  Ensure that all msgs are received in order and with no gaps. */
-export function ensureSequenceMsgOrder(client: StacksEventStream) {
+function ensureSequenceMsgOrder(client: StacksEventStream) {
   let lastReceivedMsgId = parseInt(client.lastMessageId.split('-')[0]);
   client.events.on('msgReceived', ({ id }) => {
     const msgId = parseInt(id.split('-')[0]);
@@ -25,7 +25,14 @@ export async function sendTestEvent(eventServer: EventObserverServer, body: any 
   return res;
 }
 
-export const testClients = new Set<StacksEventStream>();
+const testClients = new Set<StacksEventStream>();
+
+export async function closeTestClients() {
+  for (const client of testClients) {
+    await client.stop();
+  }
+  testClients.clear();
+}
 
 export async function createTestClient(lastMsgId = '0') {
   const client = new StacksEventStream({
@@ -37,6 +44,7 @@ export async function createTestClient(lastMsgId = '0') {
   });
   await client.connect({ waitForReady: true });
   testClients.add(client);
+  ensureSequenceMsgOrder(client);
   return client;
 }
 
@@ -48,11 +56,12 @@ export async function redisFlushAllWithPrefix(prefix: string, client: RedisClien
 
 export function withTimeout<T = void>(promise: Promise<T>, ms?: number): Promise<T> {
   const callerLine = getCallerLine();
-  const timeout = ms ?? 0.9 * parseInt(process.env.JEST_TEST_TIMEOUT as string);
+  const timeout = ms ?? Math.floor(0.9 * parseInt(process.env.JEST_TEST_TIMEOUT as string));
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`Timeout after ${ms}ms - ${callerLine}`));
-    }, timeout);
+    const timer = setTimeout(
+      () => reject(new Error(`Timeout after ${timeout}ms - ${callerLine}`)),
+      timeout
+    );
     promise
       .then(value => resolve(value))
       .catch(err => reject(err as Error))

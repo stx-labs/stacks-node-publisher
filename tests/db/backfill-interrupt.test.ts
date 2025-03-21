@@ -6,11 +6,10 @@ import { ENV } from '../../src/env';
 import { sleep, waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
 import {
+  closeTestClients,
   createTestClient,
-  ensureSequenceMsgOrder,
   redisFlushAllWithPrefix,
   sendTestEvent,
-  testClients,
   withTimeout,
 } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
@@ -37,10 +36,7 @@ describe('Backfill tests', () => {
   });
 
   afterAll(async () => {
-    for (const testClient of testClients) {
-      await testClient.stop();
-    }
-    testClients.clear();
+    await closeTestClients();
     await eventServer.close();
     await db.close();
     await redisBroker.close();
@@ -67,7 +63,6 @@ describe('Backfill tests', () => {
     const msgEvents = new EventEmitter();
     const clientStallStartedWaiter = waiterNew();
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
     client.start(async (id, _timestamp, _path, _body) => {
       msgEvents.emit('msg', id);
       if (backfillHit.isFinished) {
@@ -165,7 +160,6 @@ describe('Backfill tests', () => {
     const msgEvents = new EventEmitter();
     const clientStallStartedWaiter = waiterNew();
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
     client.start(async (id, _timestamp, _path, _body) => {
       msgEvents.emit('msg', id);
       if (backfillHit.isFinished) {
@@ -263,7 +257,6 @@ describe('Backfill tests', () => {
     }
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
 
     const backfillHit = waiterNew();
     const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
@@ -348,7 +341,6 @@ describe('Backfill tests', () => {
     }
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
 
     const backfillHit = waiterNew();
     const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
@@ -445,7 +437,6 @@ describe('Backfill tests', () => {
     }
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
 
     const backfillHit = waiterNew();
     const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
@@ -546,7 +537,6 @@ describe('Backfill tests', () => {
     }
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    ensureSequenceMsgOrder(client);
 
     const backfillHit = waiterNew();
     const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {

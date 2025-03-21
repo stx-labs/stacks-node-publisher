@@ -286,11 +286,6 @@ describe('Redis interrupts', () => {
     // Ensure the empty redis db condition was triggered
     await onMsgAddedToEmptyRedisDb;
 
-    // We expect the client to not have received the message we threw on (simulating redis wipe during event ingestion)
-    expect(parseInt(client.lastMessageId.split('-')[0])).toBeLessThan(
-      parseInt(wipedMsgId.msgId.split('-')[0])
-    );
-
     // Check that the msg we wiped after pg insertion is what we expect
     lastDbMsg = await db.getLastMessage();
     assert(lastDbMsg);

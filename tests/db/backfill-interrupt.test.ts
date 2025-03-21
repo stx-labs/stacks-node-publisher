@@ -14,6 +14,7 @@ import {
 } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
+import { timeout } from '@hirosystems/api-toolkit';
 
 describe('Backfill tests', () => {
   let db: PgStore;
@@ -61,21 +62,15 @@ describe('Backfill tests', () => {
       return Promise.resolve();
     });
 
-    const msgEvents = new EventEmitter();
     const clientStallStartedWaiter = waiterNew();
     const client = await createTestClient(lastDbMsg?.sequence_number);
-    client.start(async (id, _timestamp, _path, _body) => {
-      msgEvents.emit('msg', id);
+    client.start(async (_id, _timestamp, _path, _body) => {
       if (backfillHit.isFinished) {
         backfillHit = waiterNew();
         clientStallStartedWaiter.finish();
         await sleep(ENV.MAX_IDLE_TIME_MS * 2);
       }
     });
-
-    const msgSender = setInterval(() => {
-      void sendTestEvent(eventServer, { test: 'msgPump' });
-    }, 200);
 
     // Wait for the client to begin the msg ingestion stall
     await withTimeout(clientStallStartedWaiter);
@@ -99,10 +94,26 @@ describe('Backfill tests', () => {
 
     // The client redis stream group should be pruned after the MAX_IDLE_TIME_MS
     const clientConsumerGroupDestroyed = withTimeout(
-      once(client.events, 'redisConsumerGroupDestroyed')
+      new Promise<void>(resolve =>
+        client.events.once('redisConsumerGroupDestroyed', () => {
+          resolve();
+        })
+      )
     );
-    // The server should the client consumer group
-    const clientPruned = withTimeout(once(redisBroker.events, 'idleConsumerPruned'));
+
+    // The server should prune the client consumer group
+    const clientPruned = withTimeout(
+      new Promise<void>(resolve =>
+        redisBroker.events.once('idleConsumerPruned', () => {
+          resolve();
+        })
+      )
+    );
+
+    // Await for >MAX_IDLE_TIME_MS then send event to trigger prune
+    await timeout(ENV.MAX_IDLE_TIME_MS * 1.5);
+    await sendTestEvent(eventServer, { test: 'msgPump' });
+
     await Promise.all([clientConsumerGroupDestroyed, clientPruned]);
 
     // The client consumer redis stream should be pruned
@@ -126,19 +137,25 @@ describe('Backfill tests', () => {
       );
     expect(globalStreamGroupExists).toBe(false);
 
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
     // Ensure client is able to reconnect and continue processing messages
     const latestDbMsg = await db.getLastMessage();
     await withTimeout(
       new Promise<void>(resolve => {
-        msgEvents.on('msg', (id: string) => {
+        client.events.on('msgReceived', ({ id }) => {
           if (id.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
         });
+        if (client.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
       })
     );
 
-    clearInterval(msgSender);
     await client.stop();
     ENV.reload();
   });

@@ -72,6 +72,7 @@ export class RedisBroker {
 
     this.client = createClient({
       url: args.redisUrl,
+      disableOfflineQueue: true,
       name: `${this.redisStreamKeyPrefix}snp-primary-client`,
     });
 
@@ -91,6 +92,7 @@ export class RedisBroker {
     );
 
     this.listeningClient = this.client.duplicate({
+      disableOfflineQueue: true,
       name: `${this.redisStreamKeyPrefix}snp-client-listener`,
     });
     this.listeningClient.on('error', (err: Error) =>

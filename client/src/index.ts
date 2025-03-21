@@ -60,6 +60,7 @@ export class StacksEventStream {
     this.client = createClient({
       url: args.redisUrl,
       name: this.redisClientName,
+      disableOfflineQueue: true,
     });
 
     // Must have a listener for 'error' events to avoid unhandled exceptions

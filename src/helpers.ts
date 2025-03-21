@@ -68,15 +68,27 @@ export function waitForEvent<T extends Record<string, any[]>, K extends keyof T>
   });
 }
 
-export function waiterNew<T = void>(): import('@hirosystems/api-toolkit').Waiter<T> {
+export type Waiter<T = void> = Promise<T> & {
+  finish: (result: T) => void;
+  error: (error: Error) => void;
+  isFinished: boolean;
+};
+
+export function waiterNew<T = void>(): Waiter<T> {
   let resolveFn: (result: T) => void;
-  const promise = new Promise<T>(resolve => {
+  let rejectFn: (error: Error) => void;
+  const promise = new Promise<T>((resolve, reject) => {
     resolveFn = resolve;
+    rejectFn = reject;
   });
   const completer = {
     finish: (result: T) => {
       void Object.assign(promise, { isFinished: true });
       resolveFn(result);
+    },
+    error: (error: Error) => {
+      void Object.assign(promise, { isFinished: true });
+      rejectFn(error);
     },
     isFinished: false,
   };

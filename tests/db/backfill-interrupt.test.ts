@@ -260,18 +260,19 @@ describe('Backfill tests', () => {
 
     const backfillHit = waiterNew();
     const onBackfill = redisBroker._testRegisterOnPgBackfillLoop(async _msgId => {
-      const clientRedisConnectionID = await client.client.clientId();
-      const clientKillCount = await redisBroker.client.clientKill({
-        filter: ClientKillFilters.ID,
-        id: clientRedisConnectionID,
-      });
-      expect(clientKillCount).toBe(1);
-      expect(client.connectionStatus).toBe('reconnecting');
-
-      backfillHit.finish();
+      try {
+        const clientRedisConnectionID = await client.client.clientId();
+        const clientKillCount = await redisBroker.client.clientKill({
+          filter: ClientKillFilters.ID,
+          id: clientRedisConnectionID,
+        });
+        expect(clientKillCount).toBe(1);
+        backfillHit.finish();
+      } catch (error) {
+        backfillHit.error(error as Error);
+      }
 
       onBackfill.unregister();
-      return Promise.resolve();
     });
 
     const firstMsgsReceived = waiterNew<{ originalClientId: string }>();

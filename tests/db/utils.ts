@@ -45,3 +45,30 @@ export async function redisFlushAllWithPrefix(prefix: string, client: RedisClien
   const result = await client.del(keys);
   expect(result).toBe(keys.length);
 }
+
+export function withTimeout<T = void>(promise: Promise<T>, ms?: number): Promise<T> {
+  const callerLine = getCallerLine();
+  const timeout = ms ?? 0.9 * parseInt(process.env.JEST_TEST_TIMEOUT as string);
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timeout after ${ms}ms - ${callerLine}`));
+    }, timeout);
+    promise
+      .then(value => resolve(value))
+      .catch(err => reject(err as Error))
+      .finally(() => clearTimeout(timer));
+  });
+}
+
+// Returns the stack frame (source file and line number) of the caller of the caller of this function.
+// There are cleaner ways to do this with prepareStackTrace & captureStackTrace but they are not accurate
+// due to how source mapping works (e.g. ts-node and ts-jest).
+function getCallerLine(): string {
+  const stack = new Error().stack ?? '';
+  const stackLines = stack.split('\n');
+  // stackLines[0] = 'Error'
+  // stackLines[1] = this function
+  // stackLines[2] = caller
+  // stackLines[3] = caller's caller
+  return (stackLines[3] ?? '').trim().replace(/^at\s+/, '') ?? 'Failed to get caller info';
+}

@@ -4,6 +4,7 @@ const isDebugging = process.env.NODE_OPTIONS?.includes('--inspect');
 const debugTestTimeout = 60_000;
 const defaultTestTimeout = 10_000;
 const testTimeout = isDebugging ? debugTestTimeout : defaultTestTimeout;
+process.env.JEST_TEST_TIMEOUT = testTimeout.toString();
 
 const transform = { ...createDefaultPreset().transform };
 const jestConfig: JestConfigWithTsJest = {

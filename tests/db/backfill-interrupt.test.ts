@@ -11,6 +11,7 @@ import {
   redisFlushAllWithPrefix,
   sendTestEvent,
   testClients,
+  withTimeout,
 } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
@@ -290,9 +291,9 @@ describe('Backfill tests', () => {
     });
 
     // Wait for client redis connection to be killed during the backfilling process
-    await backfillHit;
+    await withTimeout(backfillHit);
 
-    const { originalClientId } = await firstMsgsReceived;
+    const { originalClientId } = await withTimeout(firstMsgsReceived);
 
     // Client should reconnect and continue processing messages
     lastDbMsg = await db.getLastMessage();

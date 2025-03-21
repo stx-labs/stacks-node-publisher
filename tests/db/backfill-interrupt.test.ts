@@ -10,6 +10,7 @@ import {
   ensureSequenceMsgOrder,
   redisFlushAllWithPrefix,
   sendTestEvent,
+  testClients,
 } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
@@ -35,6 +36,10 @@ describe('Backfill tests', () => {
   });
 
   afterAll(async () => {
+    for (const testClient of testClients) {
+      await testClient.stop();
+    }
+    testClients.clear();
     await eventServer.close();
     await db.close();
     await redisBroker.close();

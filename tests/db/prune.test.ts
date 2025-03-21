@@ -3,7 +3,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
+import { createTestClient, ensureSequenceMsgOrder, sendTestEvent, testClients } from './utils';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -26,6 +26,10 @@ describe('Prune tests', () => {
   });
 
   afterAll(async () => {
+    for (const testClient of testClients) {
+      await testClient.stop();
+    }
+    testClients.clear();
     await eventServer.close();
     await db.close();
     await redisBroker.close();

@@ -25,6 +25,8 @@ export async function sendTestEvent(eventServer: EventObserverServer, body: any 
   return res;
 }
 
+export const testClients = new Set<StacksEventStream>();
+
 export async function createTestClient(lastMsgId = '0') {
   const client = new StacksEventStream({
     redisUrl: ENV.REDIS_URL,
@@ -34,6 +36,7 @@ export async function createTestClient(lastMsgId = '0') {
     appName: 'snp-client-test',
   });
   await client.connect({ waitForReady: true });
+  testClients.add(client);
   return client;
 }
 

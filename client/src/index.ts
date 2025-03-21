@@ -214,6 +214,12 @@ export class StacksEventStream {
   async stop() {
     this.abort.abort();
     await this.streamWaiter;
-    await this.client.quit();
+    await this.client.quit().catch((error: unknown) => {
+      if ((error as Error).message?.includes('client is closed')) {
+        // ignore
+      } else {
+        throw error;
+      }
+    });
   }
 }

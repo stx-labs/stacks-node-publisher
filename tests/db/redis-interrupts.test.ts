@@ -8,7 +8,13 @@ import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
 import { waiter } from '@hirosystems/api-toolkit';
 import { sleep, waiterNew } from '../../src/helpers';
-import { createTestClient, ensureSequenceMsgOrder, sendTestEvent } from './utils';
+import {
+  createTestClient,
+  ensureSequenceMsgOrder,
+  redisFlushAllWithPrefix,
+  sendTestEvent,
+  testClients,
+} from './utils';
 import { once } from 'node:events';
 
 describe('Redis interrupts', () => {
@@ -36,6 +42,10 @@ describe('Redis interrupts', () => {
   });
 
   afterAll(async () => {
+    for (const testClient of testClients) {
+      await testClient.stop();
+    }
+    testClients.clear();
     await eventServer.close();
     await db.close();
     await redisBroker.close();

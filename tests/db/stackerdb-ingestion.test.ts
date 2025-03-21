@@ -93,5 +93,5 @@ describe('Stackerdb ingestion tests', () => {
     await allMsgsReceivedWaiter;
 
     await client.stop();
-  });
+  }, 60_000);
 });

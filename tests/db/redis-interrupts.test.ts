@@ -44,6 +44,7 @@ describe('Redis interrupts', () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
   });
 

@@ -8,7 +8,7 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { waiter } from '@hirosystems/api-toolkit';
-import { closeTestClients, createTestClient, withTimeout } from './utils';
+import { closeTestClients, createTestClient, redisFlushAllWithPrefix, withTimeout } from './utils';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;
@@ -60,6 +60,7 @@ describe('Stackerdb ingestion tests', () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
   });
 

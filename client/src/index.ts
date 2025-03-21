@@ -190,7 +190,7 @@ export class StacksEventStream {
       for (const stream of results) {
         if (stream.messages.length > 0) {
           this.logger.debug(
-            `Received messages ${stream.messages[0].id}-${stream.messages[stream.messages.length - 1].id}`
+            `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
           );
         }
         for (const item of stream.messages) {

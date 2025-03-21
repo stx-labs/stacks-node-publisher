@@ -39,6 +39,7 @@ describe('Backfill tests', () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
   });
 
@@ -77,7 +78,7 @@ describe('Backfill tests', () => {
     }, 200);
 
     // Wait for the client to begin the msg ingestion stall
-    await clientStallStartedWaiter;
+    await withTimeout(clientStallStartedWaiter);
 
     // The client consumer redis stream should still be alive
     const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
@@ -97,9 +98,11 @@ describe('Backfill tests', () => {
     expect(globalStreamGroupInfo.length).toBeGreaterThan(0);
 
     // The client redis stream group should be pruned after the MAX_IDLE_TIME_MS
-    const clientConsumerGroupDestroyed = once(client.events, 'redisConsumerGroupDestroyed');
+    const clientConsumerGroupDestroyed = withTimeout(
+      once(client.events, 'redisConsumerGroupDestroyed')
+    );
     // The server should the client consumer group
-    const clientPruned = once(redisBroker.events, 'idleConsumerPruned');
+    const clientPruned = withTimeout(once(redisBroker.events, 'idleConsumerPruned'));
     await Promise.all([clientConsumerGroupDestroyed, clientPruned]);
 
     // The client consumer redis stream should be pruned
@@ -125,13 +128,15 @@ describe('Backfill tests', () => {
 
     // Ensure client is able to reconnect and continue processing messages
     const latestDbMsg = await db.getLastMessage();
-    await new Promise<void>(resolve => {
-      msgEvents.on('msg', (id: string) => {
-        if (id.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
-          resolve();
-        }
-      });
-    });
+    await withTimeout(
+      new Promise<void>(resolve => {
+        msgEvents.on('msg', (id: string) => {
+          if (id.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+            resolve();
+          }
+        });
+      })
+    );
 
     clearInterval(msgSender);
     await client.stop();
@@ -556,19 +561,27 @@ describe('Backfill tests', () => {
       return Promise.resolve();
     });
 
+    const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
+
     // Wait for redis server data to be wiped during the backfilling process
-    await backfillHit;
+    const onBackfillHit = withTimeout(backfillHit);
 
     // Client should notice the consumer group is destroyed
-    await once(client.events, 'redisConsumerGroupDestroyed');
+    const onRedisConsumerGroupDestroyed = withTimeout(
+      once(client.events, 'redisConsumerGroupDestroyed')
+    );
 
     // New consumer redis client should be created
-    const [newConsumerClient] = (await once(redisBroker.events, 'perConsumerClientCreated')) as [
-      { clientId: string },
-    ];
+    const onPerConsumerClientCreated = withTimeout(
+      once(redisBroker.events, 'perConsumerClientCreated')
+    );
+
+    await Promise.all([onBackfillHit, onRedisConsumerGroupDestroyed, onPerConsumerClientCreated]);
+
+    const [newConsumerClient] = (await onPerConsumerClientCreated) as [{ clientId: string }];
     expect(newConsumerClient.clientId).toBe(client.clientId);
 
-    const { originalClientId } = await firstMsgsReceived;
+    const { originalClientId } = onFirstMsgsReceived;
 
     // Client should reconnect and continue processing messages
     lastDbMsg = await db.getLastMessage();

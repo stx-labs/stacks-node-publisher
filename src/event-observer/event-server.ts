@@ -51,6 +51,9 @@ export class EventObserverServer {
   }
 
   get url(): string {
+    if (!this.server.listening) {
+      throw new Error('Event server is not listening');
+    }
     const address = this.server.address() as AddressInfo;
     return `http://${address.address}:${address.port}`;
   }
@@ -84,15 +87,14 @@ export class EventObserverServer {
 
   async start({ host, port }: { host: string; port: number }): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      this.server.once('error', err => {
+      this.server.on('error', err => {
         this.logger.error(err, 'Error starting event server');
         reject(err);
       });
-      this.server.once('listening', () => {
+      this.server.listen({ host, port }, () => {
         this.logger.info(`Event server listening on ${this.url}`);
         resolve();
       });
-      this.server.listen({ host, port });
     });
   }
 

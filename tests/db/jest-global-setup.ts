@@ -40,8 +40,9 @@ async function pruneContainers(docker: Docker, label: string) {
     if (container.State !== 'exited') {
       await c.stop().catch(_err => {});
     }
-    await c.remove();
+    await c.remove({ v: true, force: true });
   }
+  await docker.pruneContainers({ filters: { label: [label] } });
   return containers.length;
 }
 

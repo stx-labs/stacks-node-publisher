@@ -69,9 +69,13 @@ export function waitForEvent<T extends Record<string, any[]>, K extends keyof T>
 }
 
 export type Waiter<T = void> = Promise<T> & {
+  /** Alias for `resolve` */
   finish: (result: T) => void;
-  error: (error: Error) => void;
+  resolve: (result: T) => void;
+  reject: (error: Error) => void;
   isFinished: boolean;
+  isResolved: boolean;
+  isRejected: boolean;
 };
 
 export function waiterNew<T = void>(): Waiter<T> {
@@ -82,15 +86,18 @@ export function waiterNew<T = void>(): Waiter<T> {
     rejectFn = reject;
   });
   const completer = {
-    finish: (result: T) => {
-      void Object.assign(promise, { isFinished: true });
+    finish: (result: T) => completer.resolve(result),
+    resolve: (result: T) => {
+      void Object.assign(promise, { isFinished: true, isResolved: true });
       resolveFn(result);
     },
-    error: (error: Error) => {
-      void Object.assign(promise, { isFinished: true });
+    reject: (error: Error) => {
+      void Object.assign(promise, { isFinished: true, isRejected: true });
       rejectFn(error);
     },
     isFinished: false,
+    isResolved: false,
+    isRejected: false,
   };
   return Object.assign(promise, completer);
 }

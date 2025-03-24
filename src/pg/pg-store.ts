@@ -8,11 +8,17 @@ import {
   runMigrations,
 } from '@hirosystems/api-toolkit';
 import * as path from 'path';
-import { sleep } from '../helpers';
+import { createTestHook, isTestEnv, sleep } from '../helpers';
 
 export const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
 
 export class PgStore extends BasePgStore {
+  _testHooks = isTestEnv
+    ? {
+        onMsgInserting: createTestHook<() => Promise<void>>(),
+      }
+    : null;
+
   static async connect(opts?: {
     skipMigrations?: boolean;
     /** If a PGSCHEMA is run `CREATE SCHEMA IF NOT EXISTS schema_name` */
@@ -66,6 +72,11 @@ export class PgStore extends BasePgStore {
     content: string,
     httpReceiveTimestamp: Date
   ): Promise<{ sequence_number: string; timestamp: string }> {
+    if (this._testHooks) {
+      for (const hook of this._testHooks.onMsgInserting) {
+        await hook();
+      }
+    }
     const insertQuery = await this.sql<{ sequence_number: string; timestamp: string }[]>`
       INSERT INTO messages (created_at, path, content)
       VALUES (${httpReceiveTimestamp}, ${eventPath}, ${content}::jsonb)

@@ -13,13 +13,17 @@ function ensureSequenceMsgOrder(client: StacksEventStream) {
   });
 }
 
-export async function sendTestEvent(eventServer: EventObserverServer, body: any = { test: 1 }) {
+export async function sendTestEvent(
+  eventServer: EventObserverServer,
+  body: any = { test: 1 },
+  throwOnError = true
+) {
   const res = await fetch(eventServer.url + '/test_path', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (res.status !== 200) {
+  if (throwOnError && res.status !== 200) {
     throw new Error(`Failed to POST event: ${res.status}`);
   }
   return res;

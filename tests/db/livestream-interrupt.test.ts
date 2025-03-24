@@ -44,6 +44,11 @@ describe('Live-stream tests', () => {
     await redisBroker.close();
   });
 
+  afterEach(async () => {
+    await closeTestClients();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
+  });
+
   test('Client stalls for MAX_IDLE_TIME_MS during redis msg live-streaming', async () => {
     const lastDbMsg = await db.getLastMessage();
 
@@ -439,6 +444,12 @@ describe('Live-stream tests', () => {
       }
     );
 
+    const clientRedisConsumergroupDestroyed = new Promise<void>(resolve => {
+      client.events.once('redisConsumerGroupDestroyed', () => {
+        resolve();
+      });
+    });
+
     const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
@@ -448,19 +459,24 @@ describe('Live-stream tests', () => {
       return Promise.resolve();
     });
 
-    // Wait for per-consumer redis client connection to be killed during the live-streaming process
-    await livestreamingHit;
+    await Promise.all([
+      // Wait for per-consumer redis client connection to be killed during the live-streaming process
+      withTimeout(livestreamingHit),
 
-    // Client should notice the consumer group is destroyed
-    await once(client.events, 'redisConsumerGroupDestroyed');
+      // Client should notice the consumer group is destroyed
+      withTimeout(clientRedisConsumergroupDestroyed),
+    ]);
 
     // New consumer redis client should be created
-    const [newConsumerClient] = (await once(redisBroker.events, 'perConsumerClientCreated')) as [
-      { clientId: string },
-    ];
+    const newConsumerClientCreated = new Promise<{ clientId: string }>(resolve => {
+      redisBroker.events.once('perConsumerClientCreated', args => {
+        resolve(args);
+      });
+    });
+    const newConsumerClient = await withTimeout(newConsumerClientCreated);
     expect(newConsumerClient.clientId).toBe(client.clientId);
 
-    const { originalClientId } = await firstMsgsReceived;
+    const { originalClientId } = await withTimeout(firstMsgsReceived);
 
     // Client should reconnect and continue processing messages
     lastDbMsg = await db.getLastMessage();
@@ -486,6 +502,227 @@ describe('Live-stream tests', () => {
     expect(clientStreamExists).toBe(0);
 
     // The client consumer group on the global stream should be pruned
+    const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
+    const globalStreamGroupExists = await redisBroker.client
+      .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      .then(
+        () => {
+          throw new Error('Expected xInfoConsumers to reject');
+        },
+        (error: Error) => {
+          if (error?.message.includes('NOGROUP')) {
+            return false;
+          } else {
+            throw error;
+          }
+        }
+      );
+    expect(globalStreamGroupExists).toBe(false);
+
+    await client.stop();
+    ENV.reload();
+  });
+
+  test('Server global redis connection is killed during redis msg live-streaming', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    ENV.LIVE_STREAM_BATCH_SIZE = 10;
+    ENV.MAX_MSG_LAG = 100;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    const client = await createTestClient(lastDbMsg?.sequence_number);
+
+    // Once backfilling is complete, add more msgs so that they are available to live-stream
+    const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
+      async () => {
+        for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
+          await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
+        }
+        onLivestreamTransition.unregister();
+      }
+    );
+
+    const livestreamingHit = waiterNew();
+    const onLivestreamingHit = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
+      async _msgId => {
+        const redisBrokerGlobalClientIds = await Promise.all(
+          [redisBroker.client, redisBroker.listeningClient, redisBroker.ingestionClient].map(
+            client => client.clientId()
+          )
+        );
+        await Promise.all(
+          redisBrokerGlobalClientIds.map(async clientId => {
+            const clientKillCount = await client.client.clientKill({
+              filter: ClientKillFilters.ID,
+              id: clientId,
+            });
+            expect(clientKillCount).toBe(1);
+          })
+        );
+
+        livestreamingHit.finish();
+
+        onLivestreamingHit.unregister();
+        return Promise.resolve();
+      }
+    );
+
+    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    client.start(async (_id, _timestamp, _path, _body) => {
+      if (!firstMsgsReceived.isFinished) {
+        // Grab the original client ID before the client reconnects
+        firstMsgsReceived.finish({ originalClientId: client.clientId });
+      }
+      return Promise.resolve();
+    });
+
+    // Wait for redis-broker's global redis client connection to be killed during the live-streaming process
+    await livestreamingHit;
+
+    const { originalClientId } = await firstMsgsReceived;
+
+    // Client should be unaffected and continue processing messages
+    lastDbMsg = await db.getLastMessage();
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    // Send over new messages to verify client is still receiving them
+    for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
+      await sendTestEvent(eventServer, { laggingMsgNumber: i });
+    }
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    // Original client ID should not have changed
+    expect(originalClientId).toBe(client.clientId);
+
+    // The client consumer redis stream should still be alive
+    const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
+    const clientStreamInfo = await redisBroker.client.xInfoStream(clientStreamKey);
+    const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
+    expect(clientStreamExists).toBe(1);
+    expect(clientStreamInfo).toBeTruthy();
+    expect(clientStreamInfo.length).toBe(0);
+
+    // The client consumer group on the global stream should still be alive
+    const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
+    const globalStreamGroupInfo = await redisBroker.client.xInfoConsumers(
+      redisBroker.globalStreamKey,
+      clientGroupKey
+    );
+    expect(globalStreamGroupInfo).toBeTruthy();
+    expect(globalStreamGroupInfo.length).toBeGreaterThan(0);
+
+    await client.stop();
+    ENV.reload();
+  });
+
+  test('Redis server data is wiped (flushall) during pg redis msg live-streaming', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    ENV.LIVE_STREAM_BATCH_SIZE = 10;
+    ENV.MAX_MSG_LAG = 100;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    const client = await createTestClient(lastDbMsg?.sequence_number);
+
+    // Once backfilling is complete, add more msgs so that they are available to live-stream
+    const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
+      async () => {
+        for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
+          await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
+        }
+        onLivestreamTransition.unregister();
+      }
+    );
+
+    const livestreamingHit = waiterNew();
+    const onLivestreamingHit = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
+      async _msgId => {
+        await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
+        livestreamingHit.finish();
+        onLivestreamingHit.unregister();
+        return Promise.resolve();
+      }
+    );
+
+    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    client.start(async (_id, _timestamp, _path, _body) => {
+      if (!firstMsgsReceived.isFinished) {
+        // Grab the original client ID before the client reconnects
+        firstMsgsReceived.finish({ originalClientId: client.clientId });
+      }
+      return Promise.resolve();
+    });
+
+    const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
+
+    // Wait for redis server data to be wiped during the live-streaming process
+    const onBackfillHit = withTimeout(livestreamingHit);
+
+    // Client should notice the consumer group is destroyed
+    const onRedisConsumerGroupDestroyed = withTimeout(
+      once(client.events, 'redisConsumerGroupDestroyed')
+    );
+
+    // New consumer redis client should be created
+    const onPerConsumerClientCreated = withTimeout(
+      once(redisBroker.events, 'perConsumerClientCreated')
+    );
+
+    await Promise.all([onBackfillHit, onRedisConsumerGroupDestroyed, onPerConsumerClientCreated]);
+
+    const [newConsumerClient] = (await onPerConsumerClientCreated) as [{ clientId: string }];
+    expect(newConsumerClient.clientId).toBe(client.clientId);
+
+    const { originalClientId } = onFirstMsgsReceived;
+
+    // Client should reconnect and continue processing messages
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    // The original client consumer redis stream should be pruned
+    const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
+    const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
+    expect(clientStreamExists).toBe(0);
+
+    // The original client consumer group on the global stream should be pruned
     const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
     const globalStreamGroupExists = await redisBroker.client
       .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)

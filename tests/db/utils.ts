@@ -54,8 +54,10 @@ export async function createTestClient(lastMsgId = '0') {
 
 export async function redisFlushAllWithPrefix(prefix: string, client: RedisClient) {
   const keys = await client.keys(`${prefix}*`);
-  const result = await client.del(keys);
-  expect(result).toBe(keys.length);
+  if (keys.length > 0) {
+    const result = await client.del(keys);
+    expect(result).toBe(keys.length);
+  }
 }
 
 export function withTimeout<T = void>(promise: Promise<T>, ms?: number): Promise<T> {

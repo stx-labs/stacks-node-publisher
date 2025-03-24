@@ -2,7 +2,7 @@ import { ClientClosedError, createClient, WatchError } from 'redis';
 import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
-import { createTestHook, sleep } from '../helpers';
+import { createTestHook, isTestEnv, sleep } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
@@ -32,13 +32,15 @@ export class RedisBroker {
     ingestionToEmptyRedisDb: [];
   }>();
 
-  _testHooks = {
-    onLiveStreamTransition: createTestHook<() => Promise<void>>(),
-    onLiveStreamDrained: createTestHook<() => Promise<void>>(),
-    onTrimGlobalStreamGetGroups: createTestHook<() => Promise<void>>(),
-    onPgBackfillLoop: createTestHook<(msgId: string) => Promise<void>>(),
-    onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
-  };
+  _testHooks = isTestEnv
+    ? {
+        onLiveStreamTransition: createTestHook<() => Promise<void>>(),
+        onLiveStreamDrained: createTestHook<() => Promise<void>>(),
+        onTrimGlobalStreamGetGroups: createTestHook<() => Promise<void>>(),
+        onPgBackfillLoop: createTestHook<(msgId: string) => Promise<void>>(),
+        onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
+      }
+    : null;
 
   constructor(args: { redisUrl: string | undefined; redisStreamKeyPrefix: string; db: PgStore }) {
     this.db = args.db;
@@ -171,8 +173,10 @@ export class RedisBroker {
     eventBody: string;
   }) {
     try {
-      for (const cb of this._testHooks.onAddStacksMsg) {
-        await cb(args.sequenceNumber);
+      if (this._testHooks) {
+        for (const cb of this._testHooks.onAddStacksMsg) {
+          await cb(args.sequenceNumber);
+        }
       }
       await this.handleMsg(args);
     } catch (error) {
@@ -447,9 +451,11 @@ export class RedisBroker {
       );
 
       if (dbResults.length > 0) {
-        for (const cb of this._testHooks.onPgBackfillLoop) {
-          // Only used by tests
-          await cb(dbResults[0].sequence_number);
+        if (this._testHooks) {
+          for (const cb of this._testHooks.onPgBackfillLoop) {
+            // Only used by tests
+            await cb(dbResults[0].sequence_number);
+          }
         }
       }
 
@@ -472,9 +478,11 @@ export class RedisBroker {
       }
     }
 
-    for (const cb of this._testHooks.onLiveStreamTransition) {
-      // Only used by tests, performs xAdd on the global stream
-      await cb();
+    if (this._testHooks) {
+      for (const cb of this._testHooks.onLiveStreamTransition) {
+        // Only used by tests, performs xAdd on the global stream
+        await cb();
+      }
     }
 
     // Now we can start streaming live messages from the global redis stream to the client redis stream.
@@ -530,9 +538,11 @@ export class RedisBroker {
           }
         }
       } else {
-        for (const cb of this._testHooks.onLiveStreamTransition) {
-          // Only used by tests, performs xAdd on the global stream
-          await cb();
+        if (this._testHooks) {
+          for (const cb of this._testHooks.onLiveStreamTransition) {
+            // Only used by tests, performs xAdd on the global stream
+            await cb();
+          }
         }
       }
     }
@@ -564,8 +574,10 @@ export class RedisBroker {
           }
         }
 
-        for (const testFn of this._testHooks.onTrimGlobalStreamGetGroups) {
-          await testFn();
+        if (this._testHooks) {
+          for (const testFn of this._testHooks.onTrimGlobalStreamGetGroups) {
+            await testFn();
+          }
         }
 
         let minDeliveredId: number | null = null;

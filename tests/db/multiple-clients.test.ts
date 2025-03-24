@@ -130,4 +130,92 @@ describe('Multiple clients tests', () => {
     await client2.stop();
     ENV.reload();
   });
+
+  test('Multiple clients started from different last msg ids', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.MAX_IDLE_TIME_MS = 200;
+    ENV.LIVE_STREAM_BATCH_SIZE = 10;
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+
+    // Client 1 will start from and ealier message than client 2
+    const client1 = await createTestClient(lastDbMsg?.sequence_number);
+
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+    lastDbMsg = await db.getLastMessage();
+    // Client 2 will start from the latest message
+    const client2 = await createTestClient(lastDbMsg?.sequence_number);
+
+    const client1BackfillCompleteWaiter = waiterNew<{ clientId: string }>();
+    const client2BackfillCompleteWaiter = waiterNew<{ clientId: string }>();
+
+    client1.start(async (id, _timestamp, _path, _body) => {
+      if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
+      }
+      await Promise.resolve();
+    });
+    client2.start(async (id, _timestamp, _path, _body) => {
+      if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
+      }
+      await Promise.resolve();
+    });
+    if (client2.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+      client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
+    }
+
+    // Wait for both clients to finish backfilling
+    const [client1OrigId, client2OrigId] = await Promise.all([
+      withTimeout(client1BackfillCompleteWaiter),
+      withTimeout(client2BackfillCompleteWaiter),
+    ]);
+
+    // Send new messages for live-streaming
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    // Ensure each client is able to continue processing all remaining messages
+    const latestDbMsg = await db.getLastMessage();
+    const client1CaughtUp = new Promise<void>(resolve => {
+      client1.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client1.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    const client2CaughtUp = new Promise<void>(resolve => {
+      client2.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client2.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    await Promise.all([
+      // wait for client 1
+      withTimeout(client1CaughtUp),
+      // wait for client 2
+      withTimeout(client2CaughtUp),
+    ]);
+
+    // Clients should have the original connection ID from when backfilling and until caught up after live-streaming
+    expect(client1.clientId).toBe(client1OrigId.clientId);
+    expect(client2.clientId).toBe(client2OrigId.clientId);
+
+    await client1.stop();
+    await client2.stop();
+    ENV.reload();
+  });
 });

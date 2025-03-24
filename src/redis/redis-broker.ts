@@ -405,6 +405,10 @@ export class RedisBroker {
           await cb(lastQueriedSequenceNumber);
         }
       }
+      // TODO: Should we catch ephemeral connection errors here and retry? otherwise an error here will
+      // abort this consumer and the client will re-init and backfill again. Could use `isPgConnectionError(err)`
+      // to check for retryable errors N amount of times before throwing and giving up completely here.
+      //
       // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
       // persisted-storage layer agnostic to whatever storage is used.
       const dbResults = await this.db.sql<

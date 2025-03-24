@@ -1,12 +1,10 @@
 import * as assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { PgStore } from '../../src/pg/pg-store';
 import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
-import { waiter } from '@hirosystems/api-toolkit';
 import { sleep, waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
@@ -131,5 +129,103 @@ describe('Postgres interrupts', () => {
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
     expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+  });
+
+  test('client recovers after pg error during backfilling', async () => {
+    let lastDbMsg = await db.getLastMessage();
+
+    ENV.DB_MSG_BATCH_SIZE = 10;
+    ENV.MAX_MSG_LAG = 100;
+    const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+    for (let i = 0; i < msgFillCount; i++) {
+      await sendTestEvent(eventServer, { backfillMsgNumber: i });
+    }
+
+    const client = await createTestClient(lastDbMsg?.sequence_number);
+
+    let backfillQueries = 0;
+    const onBackfillQueryError = waiterNew<{ msgId: string }>();
+    const onPgBackfillQuery = redisBroker._testHooks!.onBeforePgBackfillQuery.register(
+      async msgId => {
+        backfillQueries++;
+        if (backfillQueries === 2) {
+          // On the second backfill pg query, stop the postgres container to trigger an error
+          await postgresDockerContainer.stop();
+          onPgBackfillQuery.unregister();
+          onBackfillQueryError.finish({ msgId });
+        }
+      }
+    );
+
+    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    client.start(async (_id, _timestamp, _path, _body) => {
+      if (!firstMsgsReceived.isFinished) {
+        // Grab the original client ID before the client reconnects
+        firstMsgsReceived.finish({ originalClientId: client.clientId });
+      }
+      return Promise.resolve();
+    });
+
+    const onClientRedisGroupDestroyed = waiterNew();
+    client.events.once('redisConsumerGroupDestroyed', () => {
+      onClientRedisGroupDestroyed.finish();
+    });
+
+    // Wait for the backfill pg query to error, then restart pg
+    await onBackfillQueryError;
+    // Restart postgres container and wait for it to be ready
+    await postgresDockerContainer.start();
+    while (true) {
+      try {
+        await db.sql`SELECT 1`;
+        break;
+      } catch (_error) {
+        await sleep(50);
+      }
+    }
+
+    // Ensure client was able to reconnect and receive the missing messages
+    lastDbMsg = await db.getLastMessage();
+    assert(lastDbMsg);
+    await new Promise<void>(resolve => {
+      client.events.on('msgReceived', ({ id }) => {
+        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+          resolve();
+        }
+      });
+      if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        resolve();
+      }
+    });
+
+    // Client should notice the consumer group was destroyed
+    await onClientRedisGroupDestroyed;
+
+    // The original client consumer redis stream should be pruned
+    const { originalClientId } = await firstMsgsReceived;
+    const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
+    const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
+    expect(clientStreamExists).toBe(0);
+
+    // The original client consumer group on the global stream should be pruned
+    const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
+    const globalStreamGroupExists = await redisBroker.client
+      .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      .then(
+        () => {
+          throw new Error('Expected xInfoConsumers to reject');
+        },
+        (error: Error) => {
+          if (error?.message.includes('NOGROUP')) {
+            return false;
+          } else {
+            throw error;
+          }
+        }
+      );
+    expect(globalStreamGroupExists).toBe(false);
+
+    await client.stop();
+    ENV.reload();
   });
 });

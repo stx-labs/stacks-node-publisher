@@ -39,6 +39,7 @@ export class RedisBroker {
         onTrimGlobalStreamGetGroups: createTestHook<() => Promise<void>>(),
         onPgBackfillLoop: createTestHook<(msgId: string) => Promise<void>>(),
         onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
+        onBeforePgBackfillQuery: createTestHook<(msgId: string) => Promise<void>>(),
       }
     : null;
 
@@ -398,6 +399,11 @@ export class RedisBroker {
     // from the pool for the duration of the backfilling, which could be a long time for large backfills.
     let lastQueriedSequenceNumber = lastMessageId.split('-')[0];
     while (!this.abortController.signal.aborted) {
+      if (this._testHooks) {
+        for (const cb of this._testHooks.onBeforePgBackfillQuery) {
+          await cb(lastQueriedSequenceNumber);
+        }
+      }
       // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
       // persisted-storage layer agnostic to whatever storage is used.
       const dbResults = await this.db.sql<

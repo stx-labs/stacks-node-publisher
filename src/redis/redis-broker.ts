@@ -40,6 +40,7 @@ export class RedisBroker {
         onPgBackfillLoop: createTestHook<(msgId: string) => Promise<void>>(),
         onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
         onBeforePgBackfillQuery: createTestHook<(msgId: string) => Promise<void>>(),
+        onBeforeLivestreamXReadGroup: createTestHook<(msgId: string) => Promise<void>>(),
       }
     : null;
 
@@ -496,6 +497,12 @@ export class RedisBroker {
     logger.info(`Starting live streaming for client at msg ID ${lastQueriedSequenceNumber}`);
 
     while (!this.abortController.signal.aborted) {
+      if (this._testHooks) {
+        for (const cb of this._testHooks.onBeforeLivestreamXReadGroup) {
+          await cb(lastQueriedSequenceNumber);
+        }
+      }
+
       const messages = await client.xReadGroup(
         groupKey,
         consumerKey,
@@ -515,6 +522,7 @@ export class RedisBroker {
         for (const stream of messages) {
           for (const msg of stream.messages) {
             const { id, message } = msg;
+            lastQueriedSequenceNumber = id;
             logger.debug(`Received message ${id} from global stream`);
             await client
               .multi()

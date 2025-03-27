@@ -29,7 +29,7 @@ export class EventObserverServer {
     eventBody: string,
     httpReceiveTimestamp: Date
   ): Promise<void> {
-    // Storing the event in postgres in critical, if this fails then throw so the observer server
+    // Storing the event in postgres is critical, if this fails then throw so the observer server
     // returns a non-200 and the stacks-node will retry the event POST.
     const dbResult = await this.db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
     // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event

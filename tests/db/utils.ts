@@ -3,16 +3,6 @@ import { ENV } from '../../src/env';
 import { EventObserverServer } from '../../src/event-observer/event-server';
 import { RedisClient } from '../../src/redis/redis-types';
 
-/**  Ensure that all msgs are received in order and with no gaps. */
-function ensureSequenceMsgOrder(client: StacksEventStream) {
-  let lastReceivedMsgId = parseInt(client.lastMessageId.split('-')[0]);
-  client.events.on('msgReceived', ({ id }) => {
-    const msgId = parseInt(id.split('-')[0]);
-    expect(msgId).toBe(lastReceivedMsgId + 1);
-    lastReceivedMsgId = msgId;
-  });
-}
-
 export async function sendTestEvent(
   eventServer: EventObserverServer,
   body: any = { test: 1 },
@@ -38,7 +28,11 @@ export async function closeTestClients() {
   testClients.clear();
 }
 
-export async function createTestClient(lastMsgId = '0') {
+export async function createTestClient(
+  lastMsgId = '0',
+  onSequentialMsgError: (error: Error) => void
+) {
+  const callerLine = getCallerLine();
   const client = new StacksEventStream({
     redisUrl: ENV.REDIS_URL,
     eventStreamType: StacksEventStreamType.all,
@@ -48,7 +42,18 @@ export async function createTestClient(lastMsgId = '0') {
   });
   await client.connect({ waitForReady: true });
   testClients.add(client);
-  ensureSequenceMsgOrder(client);
+
+  let lastReceivedMsgId = parseInt(client.lastMessageId.split('-')[0]);
+  client.events.on('msgReceived', ({ id }) => {
+    const msgId = parseInt(id.split('-')[0]);
+    if (msgId !== lastReceivedMsgId + 1) {
+      onSequentialMsgError(
+        new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
+      );
+    }
+    lastReceivedMsgId = msgId;
+  });
+
   return client;
 }
 
@@ -86,4 +91,15 @@ function getCallerLine(): string {
   // stackLines[2] = caller
   // stackLines[3] = caller's caller
   return (stackLines[3] ?? '').trim().replace(/^at\s+/, '') ?? 'Failed to get caller info';
+}
+
+/**
+ * The synchronous version of `jest.test` includes a `done` callback that can be called with an error
+ * in order to fail the test. This function provides a similar API for async tests, which for some reason
+ * jest does not provide.
+ */
+export function testWithFailCb(fn: (onError: (error: any) => void) => Promise<void>) {
+  return new Promise<void>((resolve, reject) => {
+    fn(error => reject(error as Error)).then(resolve, reject);
+  });
 }

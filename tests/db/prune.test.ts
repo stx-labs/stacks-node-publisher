@@ -3,7 +3,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { closeTestClients, createTestClient, sendTestEvent } from './utils';
+import { closeTestClients, createTestClient, sendTestEvent, testWithFailCb } from './utils';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -48,45 +48,47 @@ describe('Prune tests', () => {
   */
 
   test('clients connecting during global stream trim', async () => {
-    // Global stream not yet initialized
-    let trimResult = await redisBroker.trimGlobalStream();
-    expect(trimResult).toEqual({ result: 'no_stream_exists' });
+    await testWithFailCb(async fail => {
+      // Global stream not yet initialized
+      let trimResult = await redisBroker.trimGlobalStream();
+      expect(trimResult).toEqual({ result: 'no_stream_exists' });
 
-    await sendTestEvent(eventServer);
+      await sendTestEvent(eventServer);
 
-    // No consumers, expect trim to maxlen
-    trimResult = await redisBroker.trimGlobalStream();
-    expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
+      // No consumers, expect trim to maxlen
+      trimResult = await redisBroker.trimGlobalStream();
+      expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
 
-    const client = await createTestClient();
+      const client = await createTestClient(undefined, fail);
 
-    const lastClientMsgId = await new Promise<number>(resolve => {
-      client.start(id => {
-        resolve(parseInt(id.split('-')[0]));
-        return Promise.resolve();
-      });
-    });
-
-    // One consumer still processing a msg, expect trim to minid of the last msg received
-    trimResult = await redisBroker.trimGlobalStream();
-    expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
-    await client.stop();
-
-    const testFn = redisBroker._testHooks!.onTrimGlobalStreamGetGroups.register(async () => {
-      // This is called in the middle of the trim operation, add a new consumer
-      const newClient = await createTestClient();
-      // Wait for the client to receive a message so that we know its group is registered on the server
-      await new Promise<void>(resolve => {
-        newClient.start(() => {
-          resolve();
+      const lastClientMsgId = await new Promise<number>(resolve => {
+        client.start(id => {
+          resolve(parseInt(id.split('-')[0]));
           return Promise.resolve();
         });
       });
-      await newClient.stop();
-      testFn.unregister();
+
+      // One consumer still processing a msg, expect trim to minid of the last msg received
+      trimResult = await redisBroker.trimGlobalStream();
+      expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
+      await client.stop();
+
+      const testFn = redisBroker._testHooks!.onTrimGlobalStreamGetGroups.register(async () => {
+        // This is called in the middle of the trim operation, add a new consumer
+        const newClient = await createTestClient(undefined, fail);
+        // Wait for the client to receive a message so that we know its group is registered on the server
+        await new Promise<void>(resolve => {
+          newClient.start(() => {
+            resolve();
+            return Promise.resolve();
+          });
+        });
+        await newClient.stop();
+        testFn.unregister();
+      });
+      // Expect the trim to be aborted because a new consumer was added
+      trimResult = await redisBroker.trimGlobalStream();
+      expect(trimResult.result).toBe('aborted');
     });
-    // Expect the trim to be aborted because a new consumer was added
-    trimResult = await redisBroker.trimGlobalStream();
-    expect(trimResult.result).toBe('aborted');
   });
 });

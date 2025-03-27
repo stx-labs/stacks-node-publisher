@@ -31,7 +31,7 @@ export class StacksEventStream {
 
   private readonly GROUP_NAME = 'primary_group';
   private readonly CONSUMER_NAME = 'primary_consumer';
-  private readonly MSG_BATCH_SIZE = 100;
+  private readonly msgBatchSize: number;
 
   connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
 
@@ -46,6 +46,7 @@ export class StacksEventStream {
     lastMessageId?: string;
     redisStreamPrefix?: string;
     appName: string;
+    msgBatchSize?: number;
   }) {
     this.eventStreamType = args.eventStreamType;
     this.lastMessageId = args.lastMessageId ?? '0'; // Automatically start at the first message.
@@ -56,6 +57,7 @@ export class StacksEventStream {
       this.redisStreamPrefix += ':';
     }
     this.appName = args.appName;
+    this.msgBatchSize = args.msgBatchSize ?? 100;
 
     this.client = createClient({
       url: args.redisUrl,
@@ -181,7 +183,7 @@ export class StacksEventStream {
           id: '>',
         },
         {
-          COUNT: this.MSG_BATCH_SIZE,
+          COUNT: this.msgBatchSize,
           BLOCK: 1000, // Wait 1 second for new events.
         }
       );

@@ -51,7 +51,7 @@ const schema = Type.Object({
   /** Max idle time (ms) a consumer stream before it's considered idle and pruned. */
   MAX_IDLE_TIME_MS: Type.Integer({ default: 60_000 }),
   /** Max number of messages that a consumer stream can lag behind compared to the last global msg before it's considered slow and pruned. */
-  MAX_MSG_LAG: Type.Integer({ default: 200 }),
+  MAX_MSG_LAG: Type.Integer({ default: 2000 }),
 });
 type Env = Static<typeof schema>;
 

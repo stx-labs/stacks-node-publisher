@@ -30,6 +30,7 @@ export class RedisBroker {
     perConsumerClientCreated: [{ clientId: string }];
     ingestionMsgGapDetected: [];
     ingestionToEmptyRedisDb: [];
+    redisClientsConnected: [];
   }>();
 
   _testHooks = isTestEnv
@@ -86,7 +87,9 @@ export class RedisBroker {
     return `${this.globalStreamKey}:group_version`;
   }
 
-  async connect({ waitForReady }: { waitForReady: boolean }) {
+  connect<TWaitForReady extends boolean = false>(args: {
+    waitForReady: TWaitForReady;
+  }): TWaitForReady extends true ? Promise<void> : undefined {
     this.logger.info(`Using REDIS_STREAM_KEY_PREFIX: '${this.redisStreamKeyPrefix}'`);
     this.logger.info(`Connecting to Redis at ${ENV.REDIS_URL} ...`);
     // Note that the default redis client connect strategy is to retry indefinitely,
@@ -104,6 +107,7 @@ export class RedisBroker {
         this.logger.info(
           `Connected to Redis, client ID: ${primaryClientID}, ingestion client ID: ${ingestionClientID}, listening client ID: ${listeningClientID}`
         );
+        this.events.emit('redisClientsConnected');
       } catch (err) {
         this.logger.error(err as Error, 'Fatal error connecting to Redis');
         throw err;
@@ -125,18 +129,23 @@ export class RedisBroker {
       }
     };
 
-    if (waitForReady) {
-      await connectClients();
-      void connectionListener();
+    if (args.waitForReady) {
+      return (async () => {
+        await connectClients();
+        void connectionListener();
+      })() as TWaitForReady extends true ? Promise<void> : undefined;
     } else {
       void connectClients()
         .then(() => {
           void connectionListener();
         })
         .catch((err: unknown) => {
-          this.logger.error(err as Error, 'Fatal error connecting to Redis');
-          process.exit(1);
+          if (!this.abortController.signal.aborted) {
+            this.logger.error(err as Error, 'Fatal error connecting to Redis');
+            process.exit(1);
+          }
         });
+      return undefined as TWaitForReady extends true ? Promise<void> : undefined;
     }
   }
 

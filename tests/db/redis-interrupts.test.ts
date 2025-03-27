@@ -13,6 +13,7 @@ import {
   createTestClient,
   redisFlushAllWithPrefix,
   sendTestEvent,
+  withTimeout,
 } from './utils';
 import { once } from 'node:events';
 
@@ -55,6 +56,24 @@ describe('Redis interrupts', () => {
       once(redisBroker.ingestionClient, 'ready'),
       once(redisBroker.listeningClient, 'ready'),
     ]);
+  });
+
+  test('Redis-broker connects without waiting for ready', async () => {
+    const broker = new RedisBroker({
+      redisUrl: ENV.REDIS_URL,
+      redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      db: db,
+    });
+    const clientConnected = waiterNew();
+    broker.client.once('ready', () => clientConnected.finish());
+    const redisBrokerClientsConnected = waiterNew();
+    broker.events.once('redisClientsConnected', () => redisBrokerClientsConnected.finish());
+    expect(broker.client.isReady).toBe(false);
+    broker.connect({ waitForReady: false });
+    expect(broker.client.isReady).toBe(false);
+    await Promise.all([withTimeout(clientConnected), withTimeout(redisBrokerClientsConnected)]);
+    expect(broker.client.isReady).toBe(true);
+    await broker.close();
   });
 
   test('events-observer POST success when redis unavailable', async () => {

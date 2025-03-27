@@ -8,7 +8,13 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { waiter } from '@hirosystems/api-toolkit';
-import { closeTestClients, createTestClient, redisFlushAllWithPrefix, withTimeout } from './utils';
+import {
+  closeTestClients,
+  createTestClient,
+  redisFlushAllWithPrefix,
+  testWithFailCb,
+  withTimeout,
+} from './utils';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;
@@ -51,6 +57,11 @@ describe('Stackerdb ingestion tests', () => {
       if (res.status !== 200) {
         throw new Error(`Failed to POST event: ${path} - ${payload.slice(0, 100)}`);
       }
+      /*
+      if (eventServer.redisWriteQueue.size >= ENV.REDIS_WRITE_QUEUE_MAX_SIZE) {
+        await eventServer.redisWriteQueue.onIdle();
+      }
+      */
     }
     rl.close();
     spyInfoLogs.forEach(spy => spy.mockRestore());
@@ -65,27 +76,31 @@ describe('Stackerdb ingestion tests', () => {
   });
 
   test('stream messages', async () => {
-    const lastDbMsg = await db.getLastMessage();
-    assert(lastDbMsg);
-    const lastDbMsgId = parseInt(lastDbMsg.sequence_number.split('-')[0]);
-    const client = await createTestClient();
+    await testWithFailCb(async fail => {
+      const lastDbMsg = await db.getLastMessage();
+      assert(lastDbMsg);
+      const lastDbMsgId = parseInt(lastDbMsg.sequence_number.split('-')[0]);
+      const client = await createTestClient(undefined, error => {
+        fail(error);
+      });
 
-    const allMsgsReceivedWaiter = waiter();
+      const allMsgsReceivedWaiter = waiter();
 
-    let lastReceivedMsgId = 0;
-    client.start(id => {
-      const msgId = parseInt(id.split('-')[0]);
-      expect(msgId).toBe(lastReceivedMsgId + 1);
-      lastReceivedMsgId = msgId;
-      // Check if all msgs that are in pg have been received by the client
-      if (msgId === lastDbMsgId) {
-        allMsgsReceivedWaiter.finish();
-      }
-      return Promise.resolve();
+      let lastReceivedMsgId = 0;
+      client.start(id => {
+        const msgId = parseInt(id.split('-')[0]);
+        expect(msgId).toBe(lastReceivedMsgId + 1);
+        lastReceivedMsgId = msgId;
+        // Check if all msgs that are in pg have been received by the client
+        if (msgId === lastDbMsgId) {
+          allMsgsReceivedWaiter.finish();
+        }
+        return Promise.resolve();
+      });
+
+      await withTimeout(allMsgsReceivedWaiter, 60_000);
+
+      await client.stop();
     });
-
-    await withTimeout(allMsgsReceivedWaiter, 60_000);
-
-    await client.stop();
   }, 60_000);
 });

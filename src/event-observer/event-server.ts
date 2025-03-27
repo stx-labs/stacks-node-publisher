@@ -5,6 +5,7 @@ import { Counter, Histogram, Registry, Summary } from 'prom-client';
 import PQueue from 'p-queue';
 import { PgStore } from '../pg/pg-store';
 import { RedisBroker } from '../redis/redis-broker';
+import { ENV } from '../env';
 
 export class EventObserverServer {
   readonly server: Server;
@@ -12,6 +13,7 @@ export class EventObserverServer {
   readonly promRegistry: Registry;
   readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
   readonly queue = new PQueue({ concurrency: 1 });
+  // readonly redisWriteQueue = new PQueue({ concurrency: 1 });
 
   readonly db: PgStore;
   readonly redisBroker: RedisBroker;
@@ -42,12 +44,30 @@ export class EventObserverServer {
     // and should have a reasonable max queue length to prevent memory exhaustion. If the limit is reached
     // then the redis write will just be skipped for this message, and the redis-broker layer already knows
     // how to handle this case (e.g. detecting msg gaps and backfilling from postgres).
+
     await this.redisBroker.addStacksMessage({
       timestamp: dbResult.timestamp,
       sequenceNumber: dbResult.sequence_number,
       eventPath,
       eventBody,
     });
+
+    /*
+    if (this.redisWriteQueue.size <= ENV.REDIS_WRITE_QUEUE_MAX_SIZE) {
+      void this.redisWriteQueue.add(async () => {
+        await this.redisBroker.addStacksMessage({
+          timestamp: dbResult.timestamp,
+          sequenceNumber: dbResult.sequence_number,
+          eventPath,
+          eventBody,
+        });
+      });
+    } else {
+      this.logger.warn(
+        `Redis write queue is full, skipping write for message ${dbResult.sequence_number}`
+      );
+    }
+      */
   }
 
   get url(): string {
@@ -112,6 +132,8 @@ export class EventObserverServer {
       });
     });
     await this.queue.onEmpty();
+    // await this.queue.onIdle();
+    // await this.redisWriteQueue.onIdle();
   }
 
   requestListener(req: IncomingMessage, res: ServerResponse) {

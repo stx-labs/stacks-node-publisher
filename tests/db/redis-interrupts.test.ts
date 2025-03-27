@@ -107,6 +107,10 @@ describe('Redis interrupts', () => {
       await redisDockerContainer.stop();
       const testMsg2 = { test: randomUUID() };
       await sendTestEvent(eventServer, testMsg2);
+
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       expect(client.connectionStatus).toBe('reconnecting');
       await timeout(100);
       expect(lastMsgWaiter.isFinished).toBe(false);
@@ -150,6 +154,9 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       const addRedisMsgThrow = waiter<{ msgId: string }>();
@@ -186,6 +193,9 @@ describe('Redis interrupts', () => {
       const throwMsgPayload = { test: 'throw_on_this_msg' };
       await sendTestEvent(eventServer, throwMsgPayload);
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // Wait for redis server data to be wiped during the backfilling process
       const thrownMsgId = await addRedisMsgThrow;
 
@@ -209,6 +219,9 @@ describe('Redis interrupts', () => {
         msgGapDetected = true;
       });
       await sendTestEvent(eventServer, { test: 'post_throw_msg' });
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       expect(msgGapDetected).toBe(true);
 
       // Ensure client was able to reconnect and receive the missing messages
@@ -265,6 +278,9 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       // right after pg data is inserted, wipe redis data before inserting into redis
@@ -310,6 +326,9 @@ describe('Redis interrupts', () => {
 
       const emptyRedisMsgPayload = { test: 'redis_empty_on_this_msg' };
       await sendTestEvent(eventServer, emptyRedisMsgPayload);
+
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
 
       // Wait for redis server data to be wiped
       const wipedMsgId = await onRedisWiped;

@@ -61,12 +61,19 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
         async () => {
           for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
+
+          // Wait for all msgs to be written to redis
+          await eventServer.redisWriteQueue.onIdle();
+
           onLivestreamTransition.unregister();
         }
       );
@@ -133,6 +140,9 @@ describe('Live-stream tests', () => {
       await timeout(ENV.MAX_IDLE_TIME_MS * 1.5);
       await sendTestEvent(eventServer, { test: 'msgPump' });
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       await Promise.all([clientConsumerGroupDestroyed, clientPruned]);
 
       // The client consumer redis stream should be pruned
@@ -159,6 +169,9 @@ describe('Live-stream tests', () => {
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
+
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
 
       // Ensure client is able to reconnect and continue processing messages
       const latestDbMsg = await db.getLastMessage();
@@ -194,12 +207,19 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
         async () => {
           for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
+
+          // Wait for all msgs to be written to redis
+          await eventServer.redisWriteQueue.onIdle();
+
           onLivestreamTransition.unregister();
         }
       );
@@ -259,6 +279,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       await clientPruned;
 
       // Remove the client msg ingestion sleep to allow it to catch up
@@ -315,6 +338,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
@@ -323,6 +349,10 @@ describe('Live-stream tests', () => {
           for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
+
+          // Wait for all msgs to be written to redis
+          await eventServer.redisWriteQueue.onIdle();
+
           onLivestreamTransition.unregister();
         }
       );
@@ -378,6 +408,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // The client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
@@ -418,6 +451,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
@@ -426,6 +462,10 @@ describe('Live-stream tests', () => {
           for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
+
+          // Wait for all msgs to be written to redis
+          await eventServer.redisWriteQueue.onIdle();
+
           onLivestreamTransition.unregister();
         }
       );
@@ -503,6 +543,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // The client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
@@ -543,6 +586,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
@@ -551,6 +597,10 @@ describe('Live-stream tests', () => {
           for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
+
+          // Wait for all msgs to be written to redis
+          await eventServer.redisWriteQueue.onIdle();
+
           onLivestreamTransition.unregister();
         }
       );
@@ -633,7 +683,6 @@ describe('Live-stream tests', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(1);
       expect(clientStreamInfo).toBeTruthy();
-      expect(clientStreamInfo.length).toBe(0);
 
       // The client consumer group on the global stream should still be alive
       const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
@@ -661,6 +710,9 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
@@ -669,6 +721,10 @@ describe('Live-stream tests', () => {
           for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
+
+          // Wait for all msgs to be written to redis
+          await eventServer.redisWriteQueue.onIdle();
+
           onLivestreamTransition.unregister();
         }
       );

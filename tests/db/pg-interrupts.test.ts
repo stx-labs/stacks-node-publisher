@@ -143,6 +143,9 @@ describe('Postgres interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       const client = await createTestClient(lastDbMsg?.sequence_number, fail);
 
       let backfillQueries = 0;

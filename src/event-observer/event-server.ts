@@ -5,6 +5,7 @@ import { Counter, Histogram, Registry, Summary } from 'prom-client';
 import PQueue from 'p-queue';
 import { PgStore } from '../pg/pg-store';
 import { RedisBroker } from '../redis/redis-broker';
+import { ENV } from '../env';
 
 export class EventObserverServer {
   readonly server: Server;
@@ -12,6 +13,7 @@ export class EventObserverServer {
   readonly promRegistry: Registry;
   readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
   readonly queue = new PQueue({ concurrency: 1 });
+  readonly redisWriteQueue = new PQueue({ concurrency: 1 });
 
   readonly db: PgStore;
   readonly redisBroker: RedisBroker;
@@ -32,22 +34,30 @@ export class EventObserverServer {
     // Storing the event in postgres is critical, if this fails then throw so the observer server
     // returns a non-200 and the stacks-node will retry the event POST.
     const dbResult = await this.db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
-    // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
+    // Fire-and-forget redis writes into a serialized promise queue, because writing the event
     // to redis is not critical and we don't want to slow down the event observer server & pg writes.
     // For example, even if redis takes a few hundred milliseconds, we don't want to block the
     // stacks-node(s) for any longer than absolutely necessary. This especially important during genesis
     // syncs and also for the high-precision stackerdb_chunk event timestamps used by clients like
     // the signer-metrics-api.
-    // The promise queue should be limited to 1 concurrency to ensure the order of events is maintained,
-    // and should have a reasonable max queue length to prevent memory exhaustion. If the limit is reached
-    // then the redis write will just be skipped for this message, and the redis-broker layer already knows
+    // The promise queue is limited to 1 concurrency to ensure the order of events is maintained,
+    // and has a max queue length to prevent memory exhaustion. If the limit is reached then the
+    // redis write will just be skipped for this message, and the redis-broker layer already knows
     // how to handle this case (e.g. detecting msg gaps and backfilling from postgres).
-    await this.redisBroker.addStacksMessage({
-      timestamp: dbResult.timestamp,
-      sequenceNumber: dbResult.sequence_number,
-      eventPath,
-      eventBody,
-    });
+    if (this.redisWriteQueue.size <= ENV.REDIS_WRITE_QUEUE_MAX_SIZE) {
+      void this.redisWriteQueue.add(async () => {
+        await this.redisBroker.addStacksMessage({
+          timestamp: dbResult.timestamp,
+          sequenceNumber: dbResult.sequence_number,
+          eventPath,
+          eventBody,
+        });
+      });
+    } else {
+      this.logger.warn(
+        `Redis write queue is full, skipping write for message ${dbResult.sequence_number}`
+      );
+    }
   }
 
   get url(): string {
@@ -111,7 +121,8 @@ export class EventObserverServer {
         }
       });
     });
-    await this.queue.onEmpty();
+    await this.queue.onIdle();
+    await this.redisWriteQueue.onIdle();
   }
 
   requestListener(req: IncomingMessage, res: ServerResponse) {

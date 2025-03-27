@@ -11,6 +11,13 @@ enum StreamType {
   ALL = 'all',
 }
 
+type StacksMessage = {
+  timestamp: string;
+  sequenceNumber: string;
+  eventPath: string;
+  eventBody: string;
+};
+
 export class RedisBroker {
   client: RedisClient;
   ingestionClient: RedisClient;
@@ -177,12 +184,7 @@ export class RedisBroker {
     );
   }
 
-  public async addStacksMessage(args: {
-    timestamp: string;
-    sequenceNumber: string;
-    eventPath: string;
-    eventBody: string;
-  }) {
+  public async addStacksMessage(args: StacksMessage) {
     try {
       if (this._testHooks) {
         for (const cb of this._testHooks.onAddStacksMsg) {
@@ -195,12 +197,7 @@ export class RedisBroker {
     }
   }
 
-  private async handleMsg(args: {
-    timestamp: string;
-    sequenceNumber: string;
-    eventPath: string;
-    eventBody: string;
-  }) {
+  private async handleMsg(args: StacksMessage) {
     // Redis stream message IDs are <millisecondsTime>-<sequenceNumber>.
     // However, we don't fully trust our timestamp to always increase monotonically (e.g. NTP glitches),
     // so we'll just use the sequence number as the timestamp.

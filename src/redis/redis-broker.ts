@@ -453,19 +453,18 @@ export class RedisBroker {
         break;
       }
 
-      // xAdd all msgs at once with redis pipelining, see:
-      // https://github.com/redis/node-redis/tree/master/packages/redis#auto-pipelining
-      await Promise.all(
-        dbResults.map(row => {
-          const messageId = `${row.sequence_number}-0`;
-          const redisMsg = {
-            timestamp: row.timestamp,
-            path: row.path,
-            body: row.content,
-          };
-          return client.xAdd(clientStreamKey, messageId, redisMsg);
-        })
-      );
+      // xAdd all msgs at once
+      let multi = client.multi();
+      for (const row of dbResults) {
+        const messageId = `${row.sequence_number}-0`;
+        const redisMsg = {
+          timestamp: row.timestamp,
+          path: row.path,
+          body: row.content,
+        };
+        multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
+      }
+      await multi.exec();
 
       if (dbResults.length > 0) {
         if (this._testHooks) {

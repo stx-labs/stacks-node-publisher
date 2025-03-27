@@ -20,24 +20,6 @@ export function unixTimeSecondsToISO(timestampSeconds: number): string {
 
 const DisposeSymbol: typeof Symbol.dispose = Symbol.dispose ?? Symbol.for('nodejs.dispose');
 
-export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason as Error);
-      return;
-    }
-    const disposable = signal ? addAbortListener(signal, onAbort) : undefined;
-    const timeout = setTimeout(() => {
-      disposable?.[DisposeSymbol]();
-      resolve();
-    }, ms);
-    function onAbort() {
-      clearTimeout(timeout);
-      reject((signal?.reason as Error) ?? new Error('Aborted'));
-    }
-  });
-}
-
 /**
  * Similar to `node:events.once` but with a predicate to filter events and supports typed EventEmitters
  */

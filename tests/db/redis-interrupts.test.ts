@@ -6,8 +6,8 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
-import { waiter } from '@hirosystems/api-toolkit';
-import { sleep, waiterNew } from '../../src/helpers';
+import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
   createTestClient,
@@ -107,7 +107,7 @@ describe('Redis interrupts', () => {
     const testMsg2 = { test: randomUUID() };
     await sendTestEvent(eventServer, testMsg2);
     expect(client.connectionStatus).toBe('reconnecting');
-    await sleep(100);
+    await timeout(100);
     expect(lastMsgWaiter.isFinished).toBe(false);
 
     // Client receives msg once redis is available again

@@ -1,4 +1,4 @@
-import { sleep } from '../../src/helpers';
+import { timeout } from '@hirosystems/api-toolkit';
 import * as events from 'node:events';
 
 describe('Helper tests', () => {
@@ -14,7 +14,7 @@ describe('Helper tests', () => {
     // Run enough iterations to detect a pattern
     for (let i = 0; i < 100; i++) {
       try {
-        const sleepPromise = sleep(1000, signal);
+        const sleepPromise = timeout(1000, signal);
         controller.abort(); // Abort immediately
         await sleepPromise;
       } catch (err) {
@@ -40,7 +40,7 @@ describe('Helper tests', () => {
 
     // Run enough iterations to detect a pattern
     for (let i = 0; i < 100; i++) {
-      await sleep(2, signal); // Complete sleep without abort
+      await timeout(2, signal); // Complete sleep without abort
 
       // Assert that listener count does not increase
       expect(countListeners()).toBe(0); // No listeners should remain after successful sleep completion

@@ -1,8 +1,7 @@
 import * as net from 'node:net';
 import * as Docker from 'dockerode';
-import { connectPostgres } from '@hirosystems/api-toolkit';
+import { connectPostgres, timeout } from '@hirosystems/api-toolkit';
 import { createClient } from 'redis';
-import { sleep } from '../../src/helpers';
 
 const testContainerLabel = 'salt-n-pepper-tests';
 
@@ -148,7 +147,7 @@ async function waitForRedis(): Promise<void> {
       break;
     } catch (error) {
       console.error(`Failed to connect to Redis:`, error);
-      await sleep(100);
+      await timeout(100);
     }
   }
   await redisClient.disconnect();

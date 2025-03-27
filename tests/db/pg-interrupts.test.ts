@@ -5,7 +5,7 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
-import { sleep, waiterNew } from '../../src/helpers';
+import { waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
   createTestClient,
@@ -13,6 +13,7 @@ import {
   sendTestEvent,
 } from './utils';
 import { once } from 'node:events';
+import { timeout } from '@hirosystems/api-toolkit';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;
@@ -112,7 +113,7 @@ describe('Postgres interrupts', () => {
         await db.sql`SELECT 1`;
         break;
       } catch (_error) {
-        await sleep(50);
+        await timeout(50);
       }
     }
 
@@ -180,7 +181,7 @@ describe('Postgres interrupts', () => {
         await db.sql`SELECT 1`;
         break;
       } catch (_error) {
-        await sleep(50);
+        await timeout(50);
       }
     }
 

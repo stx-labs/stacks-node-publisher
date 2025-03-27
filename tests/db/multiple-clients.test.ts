@@ -3,8 +3,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { sleep, waiterNew } from '../../src/helpers';
-import { once, EventEmitter } from 'node:events';
+import { waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
   createTestClient,
@@ -12,9 +11,6 @@ import {
   sendTestEvent,
   withTimeout,
 } from './utils';
-import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
-import * as assert from 'node:assert';
-import { timeout } from '@hirosystems/api-toolkit';
 
 describe('Multiple clients tests', () => {
   let db: PgStore;

@@ -3,7 +3,7 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { sleep, waiterNew } from '../../src/helpers';
+import { waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
 import {
   closeTestClients,
@@ -68,7 +68,7 @@ describe('Backfill tests', () => {
       if (backfillHit.isFinished) {
         backfillHit = waiterNew();
         clientStallStartedWaiter.finish();
-        await sleep(ENV.MAX_IDLE_TIME_MS * 2);
+        await timeout(ENV.MAX_IDLE_TIME_MS * 2);
       }
     });
 
@@ -186,7 +186,7 @@ describe('Backfill tests', () => {
       msgEvents.emit('msg', id);
       if (backfillHit.isFinished) {
         clientStallStartedWaiter.finish();
-        await sleep(300);
+        await timeout(300);
       }
     });
 

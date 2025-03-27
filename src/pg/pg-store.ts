@@ -6,9 +6,10 @@ import {
   connectPostgres,
   logger,
   runMigrations,
+  timeout,
 } from '@hirosystems/api-toolkit';
 import * as path from 'path';
-import { createTestHook, isTestEnv, sleep } from '../helpers';
+import { createTestHook, isTestEnv } from '../helpers';
 
 export const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
 
@@ -53,7 +54,7 @@ export class PgStore extends BasePgStore {
         } catch (error) {
           if (/Another migration is already running/i.test((error as Error).message)) {
             logger.warn('Another migration is already running, retrying...');
-            await sleep(100);
+            await timeout(100);
             continue;
           }
           throw error;

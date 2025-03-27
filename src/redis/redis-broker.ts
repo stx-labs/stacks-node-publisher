@@ -1,8 +1,8 @@
 import { ClientClosedError, createClient, WatchError } from 'redis';
-import { logger as defaultLogger, stopwatch } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, stopwatch, timeout } from '@hirosystems/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
-import { createTestHook, isTestEnv, sleep } from '../helpers';
+import { createTestHook, isTestEnv } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
@@ -130,7 +130,7 @@ export class RedisBroker {
             break;
           } else {
             this.logger.error(error as Error, 'Error listening for connections');
-            await sleep(1000);
+            await timeout(1000);
           }
         }
       }
@@ -484,7 +484,7 @@ export class RedisBroker {
         if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
           break;
         } else {
-          await sleep(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+          await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
           if (timer.getElapsedSeconds() > 5) {
             logger.debug(
               `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while backfilling...`
@@ -552,7 +552,7 @@ export class RedisBroker {
           if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
             break;
           } else {
-            await sleep(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+            await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
             if (timer.getElapsedSeconds() > 5) {
               logger.debug(
                 `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while live-streaming...`

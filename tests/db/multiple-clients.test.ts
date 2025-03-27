@@ -57,6 +57,8 @@ describe('Multiple clients tests', () => {
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
 
       const client1 = await createTestClient(lastDbMsg?.sequence_number, fail);
       const client2 = await createTestClient(lastDbMsg?.sequence_number, fail);
@@ -88,6 +90,9 @@ describe('Multiple clients tests', () => {
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
+
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
 
       // Ensure each client is able to continue processing all remaining messages
       const latestDbMsg = await db.getLastMessage();
@@ -178,6 +183,9 @@ describe('Multiple clients tests', () => {
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
+
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
 
       // Ensure each client is able to continue processing all remaining messages
       const latestDbMsg = await db.getLastMessage();

@@ -52,6 +52,10 @@ const schema = Type.Object({
   MAX_IDLE_TIME_MS: Type.Integer({ default: 60_000 }),
   /** Max number of messages that a consumer stream can lag behind compared to the last global msg before it's considered slow and pruned. */
   MAX_MSG_LAG: Type.Integer({ default: 2000 }),
+  /** Writes to redis during msg ingestion are fire-and-forget so as not to slow down stacks-node event processing. This controls the maximum
+   * number of messages that can be queued for writing to redis before we start dropping messages.
+   */
+  REDIS_WRITE_QUEUE_MAX_SIZE: Type.Integer({ default: 1000 }),
 });
 type Env = Static<typeof schema>;
 

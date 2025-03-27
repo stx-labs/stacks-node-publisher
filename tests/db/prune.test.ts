@@ -55,6 +55,9 @@ describe('Prune tests', () => {
 
       await sendTestEvent(eventServer);
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // No consumers, expect trim to maxlen
       trimResult = await redisBroker.trimGlobalStream();
       expect(trimResult).toEqual({ result: 'trimmed_maxlen' });

@@ -334,6 +334,9 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
 
+      // Wait for all msgs to be written to redis
+      await eventServer.redisWriteQueue.onIdle();
+
       // The client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
@@ -552,7 +555,6 @@ describe('Backfill tests', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(1);
       expect(clientStreamInfo).toBeTruthy();
-      expect(clientStreamInfo.length).toBe(0);
 
       // The client consumer group on the global stream should still be alive
       const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);

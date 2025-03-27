@@ -57,6 +57,9 @@ describe('Stackerdb ingestion tests', () => {
       if (res.status !== 200) {
         throw new Error(`Failed to POST event: ${path} - ${payload.slice(0, 100)}`);
       }
+      if (eventServer.redisWriteQueue.size >= ENV.REDIS_WRITE_QUEUE_MAX_SIZE) {
+        await eventServer.redisWriteQueue.onIdle();
+      }
     }
     rl.close();
     spyInfoLogs.forEach(spy => spy.mockRestore());

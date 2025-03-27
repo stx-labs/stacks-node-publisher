@@ -48,7 +48,7 @@ async function initApp() {
   logger.info('Initializing redis client...');
   // Start redis client connection but don't wait for it to be ready, because we want to start the
   // event server and persist messages to postgres as soon as possible, even if redis is not ready.
-  await redisBroker.connect({ waitForReady: false });
+  redisBroker.connect({ waitForReady: false });
 
   // Setup stacks-node http event observer http server
   const eventServer = new EventObserverServer({ promRegistry, db, redisBroker });

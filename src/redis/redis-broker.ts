@@ -526,21 +526,23 @@ export class RedisBroker {
         }
       );
 
-      if (messages) {
-        // TODO: this can be optimized with redis pipelining:
-        // https://github.com/redis/node-redis/tree/master/packages/redis#auto-pipelining
+      if (messages && messages.length > 0) {
         for (const stream of messages) {
-          for (const msg of stream.messages) {
-            const { id, message } = msg;
-            lastQueriedSequenceNumber = id;
-            logger.debug(`Received message ${id} from global stream`);
-            await client
-              .multi()
-              // Process message (send to client)
-              .xAdd(clientStreamKey, id, message)
-              // Acknowledge message for this consumer group
-              .xAck(this.globalStreamKey, groupKey, id)
-              .exec();
+          if (stream.messages.length > 0) {
+            const lastReceivedMsgId = stream.messages[stream.messages.length - 1].id;
+            logger.debug(
+              `Received messages ${stream.messages[0].id} - ${lastReceivedMsgId} from global stream`
+            );
+            let multi = client.multi();
+            for (const { id, message } of stream.messages) {
+              multi = multi
+                // Process message (send to client)
+                .xAdd(clientStreamKey, id, message);
+            }
+            // Acknowledge message for this consumer group
+            multi = multi.xAck(this.globalStreamKey, groupKey, lastReceivedMsgId);
+            await multi.exec();
+            lastQueriedSequenceNumber = lastReceivedMsgId;
           }
         }
 

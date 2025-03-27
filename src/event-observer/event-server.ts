@@ -34,8 +34,8 @@ export class EventObserverServer {
     const dbResult = await this.db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
     // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
     // to redis is not critical and we don't want to slow down the event observer server & pg writes.
-    // For example, even if redis takes a few hundreds milliseconds, we don't want to block the
-    // stack-node(s) for any longer than absolutely necessary. This especially important during genesis
+    // For example, even if redis takes a few hundred milliseconds, we don't want to block the
+    // stacks-node(s) for any longer than absolutely necessary. This especially important during genesis
     // syncs and also for the high-precision stackerdb_chunk event timestamps used by clients like
     // the signer-metrics-api.
     // The promise queue should be limited to 1 concurrency to ensure the order of events is maintained,

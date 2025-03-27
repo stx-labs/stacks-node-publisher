@@ -7,7 +7,6 @@ import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
-import { waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
   createTestClient,
@@ -64,9 +63,9 @@ describe('Redis interrupts', () => {
       redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
       db: db,
     });
-    const clientConnected = waiterNew();
+    const clientConnected = waiter();
     broker.client.once('ready', () => clientConnected.finish());
-    const redisBrokerClientsConnected = waiterNew();
+    const redisBrokerClientsConnected = waiter();
     broker.events.once('redisClientsConnected', () => redisBrokerClientsConnected.finish());
     expect(broker.client.isReady).toBe(false);
     broker.connect({ waitForReady: false });
@@ -149,7 +148,7 @@ describe('Redis interrupts', () => {
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
-    const addRedisMsgThrow = waiterNew<{ msgId: string }>();
+    const addRedisMsgThrow = waiter<{ msgId: string }>();
     const onRedisAddMsg = redisBroker._testHooks!.onAddStacksMsg.register(async msgId => {
       onRedisAddMsg.unregister();
       addRedisMsgThrow.finish({ msgId });
@@ -157,7 +156,7 @@ describe('Redis interrupts', () => {
       throw new Error('test redis add msg error');
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -263,14 +262,14 @@ describe('Redis interrupts', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     // right after pg data is inserted, wipe redis data before inserting into redis
-    const onRedisWiped = waiterNew<{ msgId: string }>();
+    const onRedisWiped = waiter<{ msgId: string }>();
     const onRedisAddMsg = redisBroker._testHooks!.onAddStacksMsg.register(async msgId => {
       onRedisAddMsg.unregister();
       await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
       onRedisWiped.finish({ msgId });
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -293,12 +292,12 @@ describe('Redis interrupts', () => {
       }
     });
 
-    const onMsgAddedToEmptyRedisDb = waiterNew();
+    const onMsgAddedToEmptyRedisDb = waiter();
     redisBroker.events.once('ingestionToEmptyRedisDb', () => {
       onMsgAddedToEmptyRedisDb.finish();
     });
 
-    const onClientRedisGroupDestroyed = waiterNew();
+    const onClientRedisGroupDestroyed = waiter();
     client.events.once('redisConsumerGroupDestroyed', () => {
       onClientRedisGroupDestroyed.finish();
     });

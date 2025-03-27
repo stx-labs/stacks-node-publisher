@@ -3,7 +3,6 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
 import {
   closeTestClients,
@@ -14,7 +13,7 @@ import {
 } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
-import { timeout } from '@hirosystems/api-toolkit';
+import { timeout, waiter } from '@hirosystems/api-toolkit';
 
 describe('Backfill tests', () => {
   let db: PgStore;
@@ -55,18 +54,18 @@ describe('Backfill tests', () => {
       await sendTestEvent(eventServer, { backfillMsgNumber: i });
     }
 
-    let backfillHit = waiterNew<string>();
+    let backfillHit = waiter<string>();
     const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async msgId => {
       backfillHit.finish(msgId);
       onBackfill.unregister();
       return Promise.resolve();
     });
 
-    const clientStallStartedWaiter = waiterNew();
+    const clientStallStartedWaiter = waiter();
     const client = await createTestClient(lastDbMsg?.sequence_number);
     client.start(async (_id, _timestamp, _path, _body) => {
       if (backfillHit.isFinished) {
-        backfillHit = waiterNew();
+        backfillHit = waiter();
         clientStallStartedWaiter.finish();
         await timeout(ENV.MAX_IDLE_TIME_MS * 2);
       }
@@ -172,7 +171,7 @@ describe('Backfill tests', () => {
       await sendTestEvent(eventServer, { backfillMsgNumber: i });
     }
 
-    let backfillHit = waiterNew<string>();
+    let backfillHit = waiter<string>();
     const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async msgId => {
       backfillHit.finish(msgId);
       onBackfill.unregister();
@@ -180,7 +179,7 @@ describe('Backfill tests', () => {
     });
 
     const msgEvents = new EventEmitter();
-    const clientStallStartedWaiter = waiterNew();
+    const clientStallStartedWaiter = waiter();
     const client = await createTestClient(lastDbMsg?.sequence_number);
     client.start(async (id, _timestamp, _path, _body) => {
       msgEvents.emit('msg', id);
@@ -228,7 +227,7 @@ describe('Backfill tests', () => {
     await clientPruned;
 
     // Remove the client msg ingestion sleep to allow it to catch up
-    backfillHit = waiterNew();
+    backfillHit = waiter();
 
     await clientConsumerGroupDestroyed;
 
@@ -280,7 +279,7 @@ describe('Backfill tests', () => {
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
-    const backfillHit = waiterNew();
+    const backfillHit = waiter();
     const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
       try {
         const clientRedisConnectionID = await client.client.clientId();
@@ -297,7 +296,7 @@ describe('Backfill tests', () => {
       onBackfill.unregister();
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -368,7 +367,7 @@ describe('Backfill tests', () => {
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
-    const backfillHit = waiterNew();
+    const backfillHit = waiter();
     const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
       const perConsumerClient = [...redisBroker.perConsumerClients].find(
         ([_, entry]) => entry.clientId === client.clientId
@@ -387,7 +386,7 @@ describe('Backfill tests', () => {
       return Promise.resolve();
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -467,7 +466,7 @@ describe('Backfill tests', () => {
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
-    const backfillHit = waiterNew();
+    const backfillHit = waiter();
     const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
       const redisBrokerGlobalClientIds = await Promise.all(
         [redisBroker.client, redisBroker.listeningClient, redisBroker.ingestionClient].map(client =>
@@ -490,7 +489,7 @@ describe('Backfill tests', () => {
       return Promise.resolve();
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -570,7 +569,7 @@ describe('Backfill tests', () => {
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
-    const backfillHit = waiterNew();
+    const backfillHit = waiter();
     const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
       await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
       backfillHit.finish();
@@ -578,7 +577,7 @@ describe('Backfill tests', () => {
       return Promise.resolve();
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -662,7 +661,7 @@ describe('Backfill tests', () => {
 
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
-    const onTransitionToLive = waiterNew();
+    const onTransitionToLive = waiter();
     const transitionMsgPayload = { msg: 'msg added during backfill to livestream transition' };
     const hook = redisBroker._testHooks!.onLiveStreamTransition.register(async () => {
       await sendTestEvent(eventServer, transitionMsgPayload);
@@ -670,8 +669,8 @@ describe('Backfill tests', () => {
       hook.unregister();
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
-    const onTransitionMsgReceived = waiterNew();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
+    const onTransitionMsgReceived = waiter();
     client.start(async (_id, _timestamp, _path, body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects

@@ -5,7 +5,6 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
-import { waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
   createTestClient,
@@ -13,7 +12,7 @@ import {
   sendTestEvent,
 } from './utils';
 import { once } from 'node:events';
-import { timeout } from '@hirosystems/api-toolkit';
+import { timeout, waiter } from '@hirosystems/api-toolkit';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;
@@ -65,7 +64,7 @@ describe('Postgres interrupts', () => {
     const lastIngestedMsg = { test: 'pg_okay' };
     await sendTestEvent(eventServer, lastIngestedMsg);
 
-    const onPgMsgInsertWatier = waiterNew();
+    const onPgMsgInsertWatier = waiter();
     db._testHooks!.onMsgInserting.register(async () => {
       if (!onPgMsgInsertWatier.isFinished) {
         onPgMsgInsertWatier.finish();
@@ -145,7 +144,7 @@ describe('Postgres interrupts', () => {
     const client = await createTestClient(lastDbMsg?.sequence_number);
 
     let backfillQueries = 0;
-    const onBackfillQueryError = waiterNew<{ msgId: string }>();
+    const onBackfillQueryError = waiter<{ msgId: string }>();
     const onPgBackfillQuery = redisBroker._testHooks!.onBeforePgBackfillQuery.register(
       async msgId => {
         backfillQueries++;
@@ -158,7 +157,7 @@ describe('Postgres interrupts', () => {
       }
     );
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -167,7 +166,7 @@ describe('Postgres interrupts', () => {
       return Promise.resolve();
     });
 
-    const onClientRedisGroupDestroyed = waiterNew();
+    const onClientRedisGroupDestroyed = waiter();
     client.events.once('redisConsumerGroupDestroyed', () => {
       onClientRedisGroupDestroyed.finish();
     });

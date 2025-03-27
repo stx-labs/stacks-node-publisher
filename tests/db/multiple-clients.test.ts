@@ -3,7 +3,6 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { waiterNew } from '../../src/helpers';
 import {
   closeTestClients,
   createTestClient,
@@ -11,6 +10,7 @@ import {
   sendTestEvent,
   withTimeout,
 } from './utils';
+import { waiter } from '@hirosystems/api-toolkit';
 
 describe('Multiple clients tests', () => {
   let db: PgStore;
@@ -60,8 +60,8 @@ describe('Multiple clients tests', () => {
     const client2 = await createTestClient(lastDbMsg?.sequence_number);
 
     lastDbMsg = await db.getLastMessage();
-    const client1BackfillCompleteWaiter = waiterNew<{ clientId: string }>();
-    const client2BackfillCompleteWaiter = waiterNew<{ clientId: string }>();
+    const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
+    const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
     client1.start(async (id, _timestamp, _path, _body) => {
       if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
@@ -145,8 +145,8 @@ describe('Multiple clients tests', () => {
     // Client 2 will start from the latest message
     const client2 = await createTestClient(lastDbMsg?.sequence_number);
 
-    const client1BackfillCompleteWaiter = waiterNew<{ clientId: string }>();
-    const client2BackfillCompleteWaiter = waiterNew<{ clientId: string }>();
+    const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
+    const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
     client1.start(async (id, _timestamp, _path, _body) => {
       if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {

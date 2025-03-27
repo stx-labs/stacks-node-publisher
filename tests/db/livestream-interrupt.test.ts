@@ -3,7 +3,6 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { waiterNew } from '../../src/helpers';
 import { once, EventEmitter } from 'node:events';
 import {
   closeTestClients,
@@ -14,7 +13,7 @@ import {
 } from './utils';
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
-import { timeout } from '@hirosystems/api-toolkit';
+import { timeout, waiter } from '@hirosystems/api-toolkit';
 
 describe('Live-stream tests', () => {
   let db: PgStore;
@@ -70,7 +69,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    let onLivestreamingHit = waiterNew<string>();
+    let onLivestreamingHit = waiter<string>();
     const onLivestream = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
       async msgId => {
         onLivestreamingHit.finish(msgId);
@@ -80,11 +79,11 @@ describe('Live-stream tests', () => {
     );
 
     // As soon as the client starts live-streaming, stall the client for MAX_IDLE_TIME_MS
-    const clientStallStartedWaiter = waiterNew();
+    const clientStallStartedWaiter = waiter();
     const client = await createTestClient(lastDbMsg?.sequence_number);
     client.start(async (_id, _timestamp, _path, _body) => {
       if (onLivestreamingHit.isFinished) {
-        onLivestreamingHit = waiterNew();
+        onLivestreamingHit = waiter();
         clientStallStartedWaiter.finish();
         await timeout(ENV.MAX_IDLE_TIME_MS * 2);
       }
@@ -201,7 +200,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    let onLivestreamHit = waiterNew<string>();
+    let onLivestreamHit = waiter<string>();
     const onLivestream = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
       async msgId => {
         onLivestreamHit.finish(msgId);
@@ -211,7 +210,7 @@ describe('Live-stream tests', () => {
     );
 
     const msgEvents = new EventEmitter();
-    const clientStallStartedWaiter = waiterNew();
+    const clientStallStartedWaiter = waiter();
     const client = await createTestClient(lastDbMsg?.sequence_number);
     client.start(async (id, _timestamp, _path, _body) => {
       msgEvents.emit('msg', id);
@@ -259,7 +258,7 @@ describe('Live-stream tests', () => {
     await clientPruned;
 
     // Remove the client msg ingestion sleep to allow it to catch up
-    onLivestreamHit = waiterNew();
+    onLivestreamHit = waiter();
 
     await clientConsumerGroupDestroyed;
 
@@ -322,7 +321,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const livestreamHit = waiterNew();
+    const livestreamHit = waiter();
     const onLivestream = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
       async _msgId => {
         try {
@@ -341,7 +340,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -423,7 +422,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const livestreamingHit = waiterNew();
+    const livestreamingHit = waiter();
     const onLivestreaming = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
       async _msgId => {
         const perConsumerClient = [...redisBroker.perConsumerClients].find(
@@ -450,7 +449,7 @@ describe('Live-stream tests', () => {
       });
     });
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -546,7 +545,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const livestreamingHit = waiterNew();
+    const livestreamingHit = waiter();
     const onLivestreamingHit = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
       async _msgId => {
         const redisBrokerGlobalClientIds = await Promise.all(
@@ -571,7 +570,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects
@@ -662,7 +661,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const livestreamingHit = waiterNew();
+    const livestreamingHit = waiter();
     const onLivestreamingHit = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
       async _msgId => {
         await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
@@ -672,7 +671,7 @@ describe('Live-stream tests', () => {
       }
     );
 
-    const firstMsgsReceived = waiterNew<{ originalClientId: string }>();
+    const firstMsgsReceived = waiter<{ originalClientId: string }>();
     client.start(async (_id, _timestamp, _path, _body) => {
       if (!firstMsgsReceived.isFinished) {
         // Grab the original client ID before the client reconnects

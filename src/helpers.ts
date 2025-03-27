@@ -50,40 +50,6 @@ export function waitForEvent<T extends Record<string, any[]>, K extends keyof T>
   });
 }
 
-export type Waiter<T = void> = Promise<T> & {
-  /** Alias for `resolve` */
-  finish: (result: T) => void;
-  resolve: (result: T) => void;
-  reject: (error: Error) => void;
-  isFinished: boolean;
-  isResolved: boolean;
-  isRejected: boolean;
-};
-
-export function waiterNew<T = void>(): Waiter<T> {
-  let resolveFn: (result: T) => void;
-  let rejectFn: (error: Error) => void;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolveFn = resolve;
-    rejectFn = reject;
-  });
-  const completer = {
-    finish: (result: T) => completer.resolve(result),
-    resolve: (result: T) => {
-      void Object.assign(promise, { isFinished: true, isResolved: true });
-      resolveFn(result);
-    },
-    reject: (error: Error) => {
-      void Object.assign(promise, { isFinished: true, isRejected: true });
-      rejectFn(error);
-    },
-    isFinished: false,
-    isResolved: false,
-    isRejected: false,
-  };
-  return Object.assign(promise, completer);
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createTestHook<T extends (...args: any[]) => Promise<void>>() {
   const callbacks = new Set<T>();

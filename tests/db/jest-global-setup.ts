@@ -1,7 +1,7 @@
+import * as net from 'node:net';
 import * as Docker from 'dockerode';
-import { connectPostgres } from '@hirosystems/api-toolkit';
+import { connectPostgres, timeout } from '@hirosystems/api-toolkit';
 import { createClient } from 'redis';
-import { sleep } from '../../src/helpers';
 
 const testContainerLabel = 'salt-n-pepper-tests';
 
@@ -39,22 +39,19 @@ async function pruneContainers(docker: Docker, label: string) {
     if (container.State !== 'exited') {
       await c.stop().catch(_err => {});
     }
-    await c.remove();
+    await c.remove({ v: true, force: true });
   }
+  await docker.pruneContainers({ filters: { label: [label] } });
   return containers.length;
 }
 
-async function startContainer({
-  docker,
-  image,
-  ports,
-  env,
-}: {
+async function startContainer(args: {
   docker: Docker;
   image: string;
   ports: number[];
   env: string[];
-}): Promise<{ image: string; bindedPorts: { [port: number]: number } }> {
+}) {
+  const { docker, image, ports, env } = args;
   try {
     const imgPulled = await isDockerImagePulled(docker, image);
     if (!imgPulled) {
@@ -63,10 +60,11 @@ async function startContainer({
     }
     console.log(`Creating ${image} container...`);
     const exposedPorts = ports.reduce((acc, port) => ({ ...acc, [`${port}/tcp`]: {} }), {});
-    const portBindings = ports.reduce(
-      (acc, port) => ({ ...acc, [`${port}/tcp`]: [{ HostPort: '0' }] }),
-      {}
-    );
+    const portBindings: Record<string, { HostPort: string }[]> = {};
+    const freePorts = await findFreePorts(ports.length);
+    ports.forEach((port, index) => {
+      portBindings[`${port}/tcp`] = [{ HostPort: freePorts[index].toString() }];
+    });
     const container = await docker.createContainer({
       Labels: { [testContainerLabel]: 'true' },
       Image: image,
@@ -95,11 +93,29 @@ async function startContainer({
     containerIds.push(container.id);
     Object.assign(globalThis, { __TEST_DOCKER_CONTAINER_IDS: containerIds });
 
-    return { image, bindedPorts };
+    return { image, bindedPorts, containerId: container.id };
   } catch (error) {
     console.error('Error starting PostgreSQL container:', error);
     throw error;
   }
+}
+
+async function findFreePorts(count: number) {
+  const servers = await Promise.all(
+    Array.from({ length: count }, () => {
+      return new Promise<net.Server>((resolve, reject) => {
+        const server = net.createServer();
+        server.listen(0, () => resolve(server)).on('error', reject);
+      });
+    })
+  );
+  const ports = await Promise.all(
+    servers.map(server => {
+      const { port } = server.address() as net.AddressInfo;
+      return new Promise<number>(resolve => server.close(() => resolve(port)));
+    })
+  );
+  return ports;
 }
 
 // Helper function to wait for PostgreSQL to be ready
@@ -131,7 +147,7 @@ async function waitForRedis(): Promise<void> {
       break;
     } catch (error) {
       console.error(`Failed to connect to Redis:`, error);
-      await sleep(100);
+      await timeout(100);
     }
   }
   await redisClient.disconnect();
@@ -162,6 +178,7 @@ export default async function setup(): Promise<void> {
     for (const entry of Object.entries(pgConfig)) {
       process.env[entry[0]] = entry[1];
     }
+    process.env['_PG_DOCKER_CONTAINER_ID'] = pgContainer.containerId;
     // Wait for the database to be ready
     await waitForPostgres();
   };
@@ -175,6 +192,7 @@ export default async function setup(): Promise<void> {
       env: [],
     });
     process.env['REDIS_URL'] = `redis://127.0.0.1:${redisContainer.bindedPorts[redisPort]}`;
+    process.env['_REDIS_DOCKER_CONTAINER_ID'] = redisContainer.containerId;
     // wait for redis to be ready
     await waitForRedis();
   };

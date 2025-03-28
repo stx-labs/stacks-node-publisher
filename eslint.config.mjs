@@ -1,6 +1,4 @@
 // @ts-check
-/* eslint-disable @typescript-eslint/no-unsafe-member-access */
-/* eslint-disable @typescript-eslint/no-unsafe-argument */
 
 import eslint from '@eslint/js';
 import tseslint from 'typescript-eslint';
@@ -19,7 +17,7 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ['dist/**', 'coverage/**', 'testing/**', 'chunk-parser/**'],
+    ignores: ['dist/**', 'coverage/**', 'testing/**', 'chunk-parser/**', 'restore.js'],
   },
   {
     rules: {
@@ -46,7 +44,7 @@ export default tseslint.config(
         { ignoreArrowShorthand: true, ignoreVoidOperator: true },
       ],
       '@typescript-eslint/no-empty-function': 'off',
-      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': [
         'warn',
         {

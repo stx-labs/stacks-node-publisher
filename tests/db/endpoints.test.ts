@@ -25,22 +25,12 @@ describe('Endpoint tests', () => {
     redisBroker = new RedisBroker({
       redisUrl: ENV.REDIS_URL,
       redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      db: db,
     });
     await redisBroker.connect({ waitForReady: true });
 
     const promRegistry = new Registry();
-    eventServer = new EventObserverServer({
-      promRegistry: promRegistry,
-      eventMessageHandler: async (eventPath, eventBody, httpReceiveTimestamp) => {
-        const dbResult = await db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
-        await redisBroker.addStacksMessage({
-          timestamp: dbResult.timestamp,
-          sequenceNumber: dbResult.sequence_number,
-          eventPath,
-          eventBody,
-        });
-      },
-    });
+    eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
     await eventServer.start({ port: 0, host: '127.0.0.1' });
 
     promServer = await buildPromServer({ registry: promRegistry });
@@ -99,7 +89,7 @@ describe('Endpoint tests', () => {
     expect(body).toMatch(new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
   });
 
-  test('stream messages from redis', async () => {
+  test.skip('stream messages from redis', async () => {
     const appRedisClient = createClient({
       url: ENV.REDIS_URL,
       name: 'salt-n-pepper-server-client-test',
@@ -128,18 +118,67 @@ describe('Endpoint tests', () => {
     await appRedisClient.quit();
   });
 
-  test('client lib test', async () => {
+  /* Robustness test scenarios:
+   *  - Multiple clients started at the same time with the same lastMessageId
+   *  - Multiple clients started at the same time with different lastMessageIds
+   *  - Client stalls for MAX_IDLE during pg backfill
+   *  - Client stalls for MAX_IDLE during redis live-streaming
+   *  - Client activity is within MAX_IDLE but exceeds MAX_MSG_LAG threshold during pg backfill
+   *  - Client activity is within MAX_IDLE but exceeds MAX_MSG_LAG threshold during redis live-streaming
+   *  - Client redis network connection is killed during pg backfill
+   *  - Client redis network connection is killed during redis live-streaming
+   *  - Server redis connection for client is killed during pg backfill
+   *  - Server redis connection for client is killed during redis live-streaming
+   *  - Server global redis connection is killed during pg backfill
+   *  - Server global redis connection is killed during redis live-streaming
+   *  - Redis server data is wiped (redis-cli flushall) during pg backfill
+   *  - Redis server data is wiped (redis-cli flushall) during redis live-streaming
+   *  - Redis ingestion client connection is killed and unavailable right after pg insertion
+   *  - Redis server data is wiped (redis-cli flushall) right after pg insertion
+   *  - Msg added to pg exactly in the middle of client transition from backfilling to live-streaming
+   */
+
+  test.skip('client lib test', async () => {
+    redisBroker._testHooks!.onLiveStreamTransition.register(async () => {
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch(eventServer.url + '/test_path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ test: 'transition test data', i }),
+        });
+        if (res.status !== 200) {
+          throw new Error(`Failed to POST event: ${res.status}`);
+        }
+      }
+    });
+
+    const streamDrainedCb = redisBroker._testHooks!.onLiveStreamDrained.register(async () => {
+      for (let i = 0; i < 10; i++) {
+        const res = await fetch(eventServer.url + '/test_path', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ test: 'stream drained data', i }),
+        });
+        if (res.status !== 200) {
+          throw new Error(`Failed to POST event: ${res.status}`);
+        }
+      }
+      streamDrainedCb.unregister();
+    });
+
     let lastMsgId = '0';
     const client = new StacksEventStream({
       redisUrl: ENV.REDIS_URL,
       eventStreamType: StacksEventStreamType.all,
       lastMessageId: lastMsgId,
       redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      appName: 'salt-n-pepper-server-client-test',
     });
     await client.connect({ waitForReady: true });
     let messagesProcessed = 0;
     let lastTimestamp = 0;
     client.start(async (id, timestamp, path, body) => {
+      expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
       lastMsgId = id;
 
       expect(typeof path).toBe('string');

@@ -39,6 +39,19 @@ const schema = Type.Object({
 
   REDIS_URL: Type.Optional(Type.String()),
   REDIS_STREAM_KEY_PREFIX: Type.String({ default: '' }),
+
+  /** Size of the batch of messages to read from pg and write to redis during backfilling. */
+  DB_MSG_BATCH_SIZE: Type.Integer({ default: 100 }),
+  /** Max size of the batch of messages to read from redis global stream and write into the consumer stream during live-streaming. */
+  LIVE_STREAM_BATCH_SIZE: Type.Integer({ default: 100 }),
+  /** Max number of msgs in a consumer stream before backpressure (waiting) is applied. */
+  CLIENT_REDIS_STREAM_MAX_LEN: Type.Integer({ default: 100 }),
+  /** Interval (ms) to poll for backpressure on the consumer stream. */
+  CLIENT_REDIS_BACKPRESSURE_POLL_MS: Type.Integer({ default: 100 }),
+  /** Max idle time (ms) a consumer stream before it's considered idle and pruned. */
+  MAX_IDLE_TIME_MS: Type.Integer({ default: 60_000 }),
+  /** Max number of messages that a consumer stream can lag behind compared to the last global msg before it's considered slow and pruned. */
+  MAX_MSG_LAG: Type.Integer({ default: 2000 }),
 });
 type Env = Static<typeof schema>;
 

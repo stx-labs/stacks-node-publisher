@@ -3,29 +3,57 @@ import { logger as defaultLogger, SERVER_VERSION } from '@hirosystems/api-toolki
 import { AddressInfo } from 'node:net';
 import { Counter, Histogram, Registry, Summary } from 'prom-client';
 import PQueue from 'p-queue';
-
-export type EventMessageHandler = (
-  eventPath: string,
-  eventBody: string,
-  httpReceiveTimestamp: Date
-) => Promise<void>;
+import { PgStore } from '../pg/pg-store';
+import { RedisBroker } from '../redis/redis-broker';
 
 export class EventObserverServer {
   readonly server: Server;
   readonly logger = defaultLogger.child({ module: 'EventObserver' });
-  readonly eventMessageHandler: EventMessageHandler;
   readonly promRegistry: Registry;
   readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
   readonly queue = new PQueue({ concurrency: 1 });
 
-  constructor(args: { eventMessageHandler: EventMessageHandler; promRegistry: Registry }) {
-    this.eventMessageHandler = args.eventMessageHandler;
+  readonly db: PgStore;
+  readonly redisBroker: RedisBroker;
+
+  constructor(args: { db: PgStore; redisBroker: RedisBroker; promRegistry: Registry }) {
     this.promRegistry = args.promRegistry;
     this.promMetrics = this.setupPromMetrics();
     this.server = createServer((req, res) => this.requestListener(req, res));
+    this.db = args.db;
+    this.redisBroker = args.redisBroker;
+  }
+
+  async eventMessageHandler(
+    eventPath: string,
+    eventBody: string,
+    httpReceiveTimestamp: Date
+  ): Promise<void> {
+    // Storing the event in postgres is critical, if this fails then throw so the observer server
+    // returns a non-200 and the stacks-node will retry the event POST.
+    const dbResult = await this.db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
+    // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
+    // to redis is not critical and we don't want to slow down the event observer server & pg writes.
+    // For example, even if redis takes a few hundred milliseconds, we don't want to block the
+    // stacks-node(s) for any longer than absolutely necessary. This especially important during genesis
+    // syncs and also for the high-precision stackerdb_chunk event timestamps used by clients like
+    // the signer-metrics-api.
+    // The promise queue should be limited to 1 concurrency to ensure the order of events is maintained,
+    // and should have a reasonable max queue length to prevent memory exhaustion. If the limit is reached
+    // then the redis write will just be skipped for this message, and the redis-broker layer already knows
+    // how to handle this case (e.g. detecting msg gaps and backfilling from postgres).
+    await this.redisBroker.addStacksMessage({
+      timestamp: dbResult.timestamp,
+      sequenceNumber: dbResult.sequence_number,
+      eventPath,
+      eventBody,
+    });
   }
 
   get url(): string {
+    if (!this.server.listening) {
+      throw new Error('Event server is not listening');
+    }
     const address = this.server.address() as AddressInfo;
     return `http://${address.address}:${address.port}`;
   }
@@ -59,15 +87,14 @@ export class EventObserverServer {
 
   async start({ host, port }: { host: string; port: number }): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      this.server.once('error', err => {
+      this.server.on('error', err => {
         this.logger.error(err, 'Error starting event server');
         reject(err);
       });
-      this.server.once('listening', () => {
+      this.server.listen({ host, port }, () => {
         this.logger.info(`Event server listening on ${this.url}`);
         resolve();
       });
-      this.server.listen({ host, port });
     });
   }
 

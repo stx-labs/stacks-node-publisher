@@ -12,7 +12,9 @@ export default async function teardown(): Promise<void> {
       .inspect()
       .then(i => i.Image)
       .catch(() => '?');
-    await container.stop();
+    await container.stop().catch(error => {
+      console.error(`Failed to stop container ${containerId}: ${error}`);
+    });
     await container.remove({ v: true });
     console.log(`Test docker container ${info} ${containerId} stopped and removed`);
   }

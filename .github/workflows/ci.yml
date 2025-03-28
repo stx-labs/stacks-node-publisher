@@ -58,6 +58,9 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   build-publish:
+    permissions:
+      contents: write
+      issues: write
     runs-on: ubuntu-latest
     outputs:
       docker_image_digest: ${{ steps.docker_push.outputs.digest }}
@@ -74,7 +77,7 @@ jobs:
         id: semantic
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           SEMANTIC_RELEASE_PACKAGE: ${{ github.event.repository.name }}
         with:

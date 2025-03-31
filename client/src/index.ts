@@ -56,7 +56,7 @@ export class StacksEventStream {
     if (this.redisStreamPrefix !== '' && !this.redisStreamPrefix.endsWith(':')) {
       this.redisStreamPrefix += ':';
     }
-    this.appName = args.appName;
+    this.appName = this.sanitizeRedisClientName(args.appName);
     this.msgBatchSize = args.msgBatchSize ?? 100;
 
     this.client = createClient({
@@ -79,6 +79,12 @@ export class StacksEventStream {
       this.connectionStatus = 'ended';
       this.logger.info('Redis connection ended');
     });
+  }
+
+  // Sanitize the redis client name to only include valid characters (same approach used in the StackExchange.RedisClient https://github.com/StackExchange/StackExchange.Redis/pull/2654/files)
+  sanitizeRedisClientName(name: string): string {
+    const nameSanitizer = /[^!-~]+/g;
+    return name.trim().replace(nameSanitizer, '-');
   }
 
   get redisClientName() {

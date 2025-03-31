@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.3...v1.1.0) (2025-03-31)
+
+### Features
+
+* per-client redis msg streams ([#13](https://github.com/hirosystems/salt-n-pepper/issues/13)) ([c953b68](https://github.com/hirosystems/salt-n-pepper/commit/c953b6823e3ce98ed101cae43aae0aac50f8e479))
+
 ## [1.0.3](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.2...v1.0.3) (2025-02-21)
 
 ### Bug Fixes

@@ -1,3 +1,9 @@
+## [1.1.1](https://github.com/hirosystems/salt-n-pepper/compare/v1.1.0...v1.1.1) (2025-04-01)
+
+### Bug Fixes
+
+* sanitize redis client name string to contain only valid characters ([#21](https://github.com/hirosystems/salt-n-pepper/issues/21)) ([27e1275](https://github.com/hirosystems/salt-n-pepper/commit/27e127560b2a0a6dd5deb3c98c65477e40b393be))
+
 ## [1.1.0](https://github.com/hirosystems/salt-n-pepper/compare/v1.0.3...v1.1.0) (2025-03-31)
 
 ### Features

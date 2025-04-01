@@ -2,6 +2,7 @@ import { waiter, Waiter } from '@hirosystems/api-toolkit';
 import * as WorkerThreads from 'node:worker_threads';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { EventEmitter } from 'node:events';
 
 /*
 export default function callsites() {
@@ -44,10 +45,17 @@ type WorkerDataInterface = {
   workerFile: string;
 };
 
-type WorkerPoolModuleInterface<TReq, TResp> = {
-  workerModule: NodeJS.Module;
-  processTask: (req: TReq) => Promise<TResp> | TResp;
-};
+type WorkerPoolModuleInterface<TReq, TResp> =
+  | {
+      workerModule: NodeJS.Module;
+      processTask: (req: TReq) => Promise<TResp> | TResp;
+    }
+  | {
+      default: {
+        workerModule: NodeJS.Module;
+        processTask: (req: TReq) => Promise<TResp> | TResp;
+      };
+    };
 
 type WorkerReqMsg<TReq> = {
   msgId: number;
@@ -102,6 +110,22 @@ export class WorkerManager<TReq, TResp> {
   readonly workerCount: number;
   readonly workerFile: string;
 
+  readonly events = new EventEmitter<{
+    workersReady: [];
+  }>();
+
+  public static init<TReq, TResp>(
+    workerModule: WorkerPoolModuleInterface<TReq, TResp>,
+    opts: { workerCount?: number } = {}
+  ) {
+    const workerManager = new WorkerManager(workerModule, opts);
+    return new Promise<WorkerManager<TReq, TResp>>(resolve => {
+      workerManager.events.once('workersReady', () => {
+        resolve(workerManager);
+      });
+    });
+  }
+
   constructor(
     workerModule: WorkerPoolModuleInterface<TReq, TResp>,
     opts: { workerCount?: number } = {}
@@ -110,7 +134,11 @@ export class WorkerManager<TReq, TResp> {
       throw new Error(`${this.constructor.name} must be instantiated in the main thread`);
     }
 
-    this.workerFile = workerModule.workerModule.filename;
+    if ('default' in workerModule) {
+      this.workerFile = workerModule.default.workerModule.filename;
+    } else {
+      this.workerFile = workerModule.workerModule.filename;
+    }
     this.workerCount = opts.workerCount ?? os.cpus().length;
     this.createWorkerPool();
   }
@@ -132,6 +160,7 @@ export class WorkerManager<TReq, TResp> {
   }
 
   createWorkerPool() {
+    let workersReady = 0;
     for (let i = 0; i < this.workerCount; i++) {
       const workerData: WorkerDataInterface = {
         workerFile: this.workerFile,
@@ -140,9 +169,15 @@ export class WorkerManager<TReq, TResp> {
         workerData,
       };
       if (path.extname(__filename) === '.ts') {
+        if (process.env.NODE_ENV !== 'test') {
+          console.error(
+            'Worker threads are being created with ts-node outside of a test environment.'
+          );
+        }
         workerOpt.execArgv = ['-r', 'ts-node/register'];
       }
       const worker = new WorkerThreads.Worker(__filename, workerOpt);
+      worker.unref();
       this.workers.add(worker);
       worker.on('error', err => {
         console.error(`Worker error`, err);
@@ -150,11 +185,16 @@ export class WorkerManager<TReq, TResp> {
       worker.on('messageerror', err => {
         console.error(`Worker message error`, err);
       });
-      worker.on('online', () => {
-        this.idleWorkers.push(worker);
-        this.assignJobs();
-      });
       worker.on('message', (message: unknown) => {
+        if (message === 'ready') {
+          this.idleWorkers.push(worker);
+          this.assignJobs();
+          workersReady++;
+          if (workersReady === this.workerCount) {
+            this.events.emit('workersReady');
+          }
+          return;
+        }
         this.idleWorkers.push(worker);
         this.assignJobs();
         const msg = message as WorkerRespMsg<TResp>;
@@ -181,6 +221,14 @@ export class WorkerManager<TReq, TResp> {
       worker.postMessage(job);
     }
   }
+
+  async close() {
+    await Promise.all(
+      [...this.workers].map(worker => {
+        return worker.terminate().then(() => this.workers.delete(worker));
+      })
+    );
+  }
 }
 
 if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterface)?.workerFile) {
@@ -188,6 +236,13 @@ if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterf
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const workerModule = require(workerFile) as WorkerPoolModuleInterface<unknown, unknown>;
   const parentPort = WorkerThreads.parentPort as WorkerThreads.MessagePort;
+  const processTask = (() => {
+    if ('default' in workerModule) {
+      return workerModule.default.processTask;
+    } else {
+      return workerModule.processTask;
+    }
+  })();
   parentPort.on('messageerror', err => {
     console.error(`Worker thread message error`, err);
   });
@@ -195,7 +250,7 @@ if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterf
     const msg = message as WorkerReqMsg<unknown>;
     console.log(`Worker thread ${WorkerThreads.threadId} handling msg ${msg.msgId}`);
     getMaybePromiseResult(
-      () => workerModule.processTask(msg.req),
+      () => processTask(msg.req),
       result => {
         if (result.ok) {
           const reply: WorkerRespMsg<unknown> = {
@@ -215,4 +270,5 @@ if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterf
       }
     );
   });
+  parentPort.postMessage('ready');
 }

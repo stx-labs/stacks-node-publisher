@@ -41,7 +41,7 @@
         "--selectProjects",
         "unit-tests",
         "-t",
-        "worker debugging"
+        "Worker tests"
       ],
       "outputCapture": "std",
       "console": "internalConsole",

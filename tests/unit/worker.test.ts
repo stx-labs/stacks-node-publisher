@@ -16,17 +16,16 @@ describe('Worker tests', () => {
   });
 
   test('worker debugging', async () => {
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: 10 }, (_, i) => {
         return workerManager.exec(i);
       })
     );
-
     console.log(results);
   });
 
   test('give it to me straight', async () => {
-    const results = await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: 10 }, (_, i) => {
         return workerModule.processTask(i);
       })

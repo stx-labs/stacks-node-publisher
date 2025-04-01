@@ -3,6 +3,7 @@ import * as WorkerThreads from 'node:worker_threads';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EventEmitter } from 'node:events';
+import * as SerializeError from 'serialize-error-cjs';
 
 /*
 export default function callsites() {
@@ -62,7 +63,7 @@ type WorkerReqMsg<TReq> = {
   req: TReq;
 };
 
-type WorkerRespMsg<TResp> = {
+type WorkerRespMsg<TResp, TErr = SerializeError.SerializedError> = {
   msgId: number;
 } & (
   | {
@@ -71,7 +72,7 @@ type WorkerRespMsg<TResp> = {
     }
   | {
       resp?: null;
-      error: unknown;
+      error: TErr;
     }
 );
 
@@ -200,10 +201,10 @@ export class WorkerManager<TReq, TResp> {
         const msg = message as WorkerRespMsg<TResp>;
         const replyWaiter = this.msgRequests.get(msg.msgId);
         if (replyWaiter) {
-          if (msg.resp) {
+          if (msg.error) {
+            replyWaiter.reject(SerializeError.deserializeError(msg.error));
+          } else if (msg.resp) {
             replyWaiter.resolve(msg.resp);
-          } else {
-            replyWaiter.reject(msg.error as Error);
           }
           this.msgRequests.delete(msg.msgId);
         } else {
@@ -263,7 +264,7 @@ if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterf
           console.error(`Worker thread message error`, result.err);
           const reply: WorkerRespMsg<unknown> = {
             msgId: msg.msgId,
-            error: result.err,
+            error: SerializeError.serializeError(result.err as Error),
           };
           parentPort.postMessage(reply);
         }

@@ -40,6 +40,8 @@
         "--no-cache",
         "--selectProjects",
         "unit-tests",
+        "-t",
+        "worker debugging"
       ],
       "outputCapture": "std",
       "console": "internalConsole",

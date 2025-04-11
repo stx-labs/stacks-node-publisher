@@ -3,17 +3,17 @@ import * as WorkerThreads from 'node:worker_threads';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { deserializeError, SerializedError, serializeError } from './error-serialize';
+import { deserializeError, isErrorLike, SerializedError, serializeError } from './error-serialize';
 
-type WorkerPoolModuleInterface<TReq, TResp> =
+type WorkerPoolModuleInterface<TArgs extends unknown[], TResp> =
   | {
       workerModule: NodeJS.Module;
-      processTask: (req: TReq) => Promise<TResp> | TResp;
+      processTask: (...args: TArgs) => Promise<TResp> | TResp;
     }
   | {
       default: {
         workerModule: NodeJS.Module;
-        processTask: (req: TReq) => Promise<TResp> | TResp;
+        processTask: (...args: TArgs) => Promise<TResp> | TResp;
       };
     };
 
@@ -21,12 +21,12 @@ type WorkerDataInterface = {
   workerFile: string;
 };
 
-type WorkerReqMsg<TReq> = {
+type WorkerReqMsg<TArgs extends unknown[]> = {
   msgId: number;
-  req: TReq;
+  req: TArgs;
 };
 
-type WorkerRespMsg<TResp, TErr = SerializedError> = {
+type WorkerRespMsg<TResp, TErr> = {
   msgId: number;
 } & (
   | {
@@ -63,11 +63,11 @@ function getMaybePromiseResult<T>(
   }
 }
 
-export class WorkerManager<TReq, TResp> {
+export class WorkerManager<TArgs extends unknown[], TResp> {
   private readonly workers = new Set<WorkerThreads.Worker>();
   private readonly idleWorkers: WorkerThreads.Worker[] = [];
 
-  private readonly jobQueue: WorkerReqMsg<TReq>[] = [];
+  private readonly jobQueue: WorkerReqMsg<TArgs>[] = [];
   private readonly msgRequests: Map<number, Waiter<TResp>> = new Map();
   private lastMsgId = 0;
 
@@ -82,16 +82,20 @@ export class WorkerManager<TReq, TResp> {
     return this.idleWorkers.length;
   }
 
+  get busyWorkerCount() {
+    return this.workerCount - this.idleWorkers.length;
+  }
+
   get queuedJobCount() {
     return this.jobQueue.length;
   }
 
-  public static init<TReq, TResp>(
-    workerModule: WorkerPoolModuleInterface<TReq, TResp>,
+  public static init<TArgs extends unknown[], TResp>(
+    workerModule: WorkerPoolModuleInterface<TArgs, TResp>,
     opts: { workerCount?: number } = {}
   ) {
     const workerManager = new WorkerManager(workerModule, opts);
-    return new Promise<WorkerManager<TReq, TResp>>(resolve => {
+    return new Promise<WorkerManager<TArgs, TResp>>(resolve => {
       workerManager.events.once('workersReady', () => {
         resolve(workerManager);
       });
@@ -99,7 +103,7 @@ export class WorkerManager<TReq, TResp> {
   }
 
   constructor(
-    workerModule: WorkerPoolModuleInterface<TReq, TResp>,
+    workerModule: WorkerPoolModuleInterface<TArgs, TResp>,
     opts: { workerCount?: number } = {}
   ) {
     if (!WorkerThreads.isMainThread) {
@@ -115,16 +119,16 @@ export class WorkerManager<TReq, TResp> {
     this.createWorkerPool();
   }
 
-  exec(req: TReq): Promise<TResp> {
+  exec(...args: TArgs): Promise<TResp> {
     if (this.lastMsgId >= Number.MAX_SAFE_INTEGER) {
       this.lastMsgId = 0;
     }
     const msgId = this.lastMsgId++;
     const replyWaiter = waiter<TResp>();
     this.msgRequests.set(msgId, replyWaiter);
-    const reqMsg: WorkerReqMsg<TReq> = {
+    const reqMsg: WorkerReqMsg<TArgs> = {
       msgId,
-      req,
+      req: args,
     };
     this.jobQueue.push(reqMsg);
     this.assignJobs();
@@ -176,11 +180,12 @@ export class WorkerManager<TReq, TResp> {
     worker.on('message', (message: unknown) => {
       this.idleWorkers.push(worker);
       this.assignJobs();
-      const msg = message as WorkerRespMsg<TResp>;
+      const msg = message as WorkerRespMsg<TResp, unknown>;
       const replyWaiter = this.msgRequests.get(msg.msgId);
       if (replyWaiter) {
         if (msg.error) {
-          replyWaiter.reject(deserializeError(msg.error));
+          const error = isErrorLike(msg.error) ? deserializeError(msg.error) : msg.error;
+          replyWaiter.reject(error as Error);
         } else if (msg.resp) {
           replyWaiter.resolve(msg.resp);
         }
@@ -209,37 +214,35 @@ export class WorkerManager<TReq, TResp> {
 if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterface)?.workerFile) {
   const { workerFile } = WorkerThreads.workerData as WorkerDataInterface;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const workerModule = require(workerFile) as WorkerPoolModuleInterface<unknown, unknown>;
+  const workerModule = require(workerFile) as WorkerPoolModuleInterface<unknown[], unknown>;
   const parentPort = WorkerThreads.parentPort as WorkerThreads.MessagePort;
-  let processTask: (req: unknown) => unknown;
-  if ('default' in workerModule) {
-    processTask = workerModule.default.processTask;
-  } else {
-    processTask = workerModule.processTask;
-  }
+  const processTask =
+    'default' in workerModule ? workerModule.default.processTask : workerModule.processTask;
   parentPort.on('messageerror', err => {
     console.error(`Worker thread message error`, err);
   });
   parentPort.on('message', (message: unknown) => {
-    const msg = message as WorkerReqMsg<unknown>;
-    console.log(`Worker thread ${WorkerThreads.threadId} handling msg ${msg.msgId}`);
+    const msg = message as WorkerReqMsg<unknown[]>;
     getMaybePromiseResult(
-      () => processTask(msg.req),
+      () => processTask(...msg.req),
       result => {
-        if (result.ok) {
-          const reply: WorkerRespMsg<unknown> = {
-            msgId: msg.msgId,
-            resp: result.ok,
-          };
+        try {
+          let reply: WorkerRespMsg<unknown, unknown>;
+          if (result.ok) {
+            reply = {
+              msgId: msg.msgId,
+              resp: result.ok,
+            };
+          } else {
+            const error = isErrorLike(result.err) ? serializeError(result.err) : result.err;
+            reply = {
+              msgId: msg.msgId,
+              error,
+            };
+          }
           parentPort.postMessage(reply);
-        } else {
-          // TODO: serializer error
-          console.error(`Worker thread message error`, result.err);
-          const reply: WorkerRespMsg<unknown> = {
-            msgId: msg.msgId,
-            error: serializeError(result.err as Error),
-          };
-          parentPort.postMessage(reply);
+        } catch (err: unknown) {
+          console.error(`Critical bug in work task processing`, err);
         }
       }
     );

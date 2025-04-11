@@ -94,12 +94,29 @@ export type SerializedError = {
   name: string;
   message: string;
   stack: string;
-  code?: string | number;
-  cause?: string;
   [key: string]: any;
 };
 
+export function isErrorLike(value: unknown): value is Error & { stack: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'name' in value &&
+    'message' in value &&
+    'stack' in value &&
+    typeof (value as Error).name === 'string' &&
+    typeof (value as Error).message === 'string' &&
+    typeof (value as Error).stack === 'string'
+  );
+}
+
 export function serializeError(subject: Error): SerializedError {
+  if (!isErrorLike(subject)) {
+    // If the subject is not an error, for example `throw "boom", then we throw.
+    // This function should only be passed error objects, callers can use `isErrorLike`.
+    throw new TypeError('Failed to serialize error, expected an error object');
+  }
+
   const data: Record<string, any> = {
     name: 'Error',
     message: '',
@@ -111,6 +128,7 @@ export function serializeError(subject: Error): SerializedError {
       continue;
     }
     let value = (subject as any)[prop.name];
+    // TODO: if value instanceof Error then recursively serializeError
     if (prop.serialize) {
       value = prop.serialize(value);
     }
@@ -133,13 +151,20 @@ export function serializeError(subject: Error): SerializedError {
 }
 
 export function deserializeError(subject: SerializedError): Error {
+  if (!isErrorLike(subject)) {
+    // If the subject is not an error, for example `throw "boom", then we throw.
+    // This function should only be passed error objects, callers can use `isErrorLike`.
+    throw new TypeError('Failed to desserialize error, expected an error object');
+  }
+
   const con = errorConstructors.get(subject.name) ?? Error;
   const output = Object.create(con.prototype) as Error;
 
   for (const prop of commonProperties) {
     if (!(prop.name in subject)) continue;
 
-    let value = subject[prop.name];
+    let value = (subject as any)[prop.name];
+    // TODO: if value instanceof Error then recursively deserializeError
     if (prop.deserialize) value = prop.deserialize(value);
 
     Object.defineProperty(output, prop.name, {
@@ -151,8 +176,8 @@ export function deserializeError(subject: SerializedError): Error {
   // Add any other properties (custom props not in commonProperties)
   for (const key of Object.keys(subject)) {
     if (!commonProperties.some(p => p.name === key)) {
-      (output as any)[key] = subject[key];
-      Object.assign(output, { [key]: subject[key] });
+      (output as any)[key] = (subject as any)[key];
+      Object.assign(output, { [key]: (subject as any)[key] });
     }
   }
 

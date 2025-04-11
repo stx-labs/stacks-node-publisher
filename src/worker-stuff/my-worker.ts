@@ -4,8 +4,8 @@ function sleepSync(ms: number) {
   Atomics.wait(int32, 0, 0, ms);
 }
 
-function processTask(req: number) {
-  sleepSync(500);
+function processTask(req: number, cpuWaitTimeMs: number) {
+  sleepSync(cpuWaitTimeMs);
   if (req === 3) {
     throw createError();
   }

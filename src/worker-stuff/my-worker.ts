@@ -9,6 +9,10 @@ function processTask(req: number, cpuWaitTimeMs: number) {
   if (req === 3) {
     throw createError();
   }
+  if (req === 3333) {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error
+    throw 'boom';
+  }
   return req.toString();
 }
 

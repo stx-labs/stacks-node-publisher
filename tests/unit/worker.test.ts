@@ -26,6 +26,15 @@ describe('Worker tests', () => {
     await workerManager.close();
   });
 
+  test('worker task throws with non-Error value', async () => {
+    const [res] = await Promise.allSettled([
+      // The worker will throw a non-error value when it receives req value 3333
+      workerManager.exec(3333, 1),
+    ]);
+    assert(res.status === 'rejected');
+    expect(res.reason).toBe('boom');
+  });
+
   test('run tasks with workers', async () => {
     const watch = stopwatch();
     const taskPromises = Array.from({ length: workerCount }, async (_, i) => {

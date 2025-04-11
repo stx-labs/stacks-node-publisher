@@ -131,6 +131,8 @@ export function serializeError(subject: Error): SerializedError {
     // TODO: if value instanceof Error then recursively serializeError
     if (prop.serialize) {
       value = prop.serialize(value);
+    } else {
+      value = deepSerialize(value);
     }
     data[prop.name] = value;
   }
@@ -138,7 +140,7 @@ export function serializeError(subject: Error): SerializedError {
   // Include any other enumerable own properties
   for (const key of Object.keys(subject)) {
     if (!(key in data)) {
-      data[key] = (subject as any)[key];
+      data[key] = deepSerialize((subject as any)[key]);
     }
   }
 
@@ -157,15 +159,25 @@ export function deserializeError(subject: SerializedError): Error {
     throw new TypeError('Failed to desserialize error, expected an error object');
   }
 
-  const con = errorConstructors.get(subject.name) ?? Error;
+  let con = errorConstructors.get(subject.name);
+  if (!con) {
+    // If the constructor is not found, use the generic Error constructor
+    con = Error;
+    console.error(
+      `Error constructor "${subject.name}" not found during worker error deserialization, using generic Error constructor`
+    );
+  }
   const output = Object.create(con.prototype) as Error;
 
   for (const prop of commonProperties) {
     if (!(prop.name in subject)) continue;
 
     let value = (subject as any)[prop.name];
-    // TODO: if value instanceof Error then recursively deserializeError
-    if (prop.deserialize) value = prop.deserialize(value);
+    if (prop.deserialize) {
+      value = prop.deserialize(value);
+    } else {
+      value = deepDeserialize(value);
+    }
 
     Object.defineProperty(output, prop.name, {
       ...prop.descriptor,
@@ -176,10 +188,39 @@ export function deserializeError(subject: SerializedError): Error {
   // Add any other properties (custom props not in commonProperties)
   for (const key of Object.keys(subject)) {
     if (!commonProperties.some(p => p.name === key)) {
-      (output as any)[key] = (subject as any)[key];
-      Object.assign(output, { [key]: (subject as any)[key] });
+      (output as any)[key] = deepDeserialize((subject as any)[key]);
     }
   }
 
   return output;
+}
+
+function deepSerialize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(deepSerialize);
+  } else if (isErrorLike(value)) {
+    return serializeError(value);
+  } else if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = deepSerialize(v);
+    }
+    return result;
+  }
+  return value;
+}
+
+function deepDeserialize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(deepDeserialize);
+  } else if (isErrorLike(value)) {
+    return deserializeError(value);
+  } else if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = deepDeserialize(v);
+    }
+    return result;
+  }
+  return value;
 }

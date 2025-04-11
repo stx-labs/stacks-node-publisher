@@ -5,14 +5,14 @@ function sleepSync(ms: number) {
 }
 
 function processTask(req: number, cpuWaitTimeMs: number) {
-  sleepSync(cpuWaitTimeMs);
-  if (req === 3) {
+  if (req === 2222) {
     throw createError();
   }
   if (req === 3333) {
     // eslint-disable-next-line @typescript-eslint/only-throw-error
     throw 'boom';
   }
+  sleepSync(cpuWaitTimeMs);
   return req.toString();
 }
 
@@ -30,6 +30,13 @@ function createError() {
   (error as any).randoProp = {
     foo: 'bar',
     baz: 123,
+    aggregate: [
+      Object.assign(new Error('Error in aggregate 1'), { inner1code: 123 }),
+      new MyCustomError('Error in aggregate 2'),
+    ],
+    sourceError: Object.assign(new MyCustomError('Source error'), {
+      sourceErrorInfo: { code: 44 },
+    }),
   };
   return error;
 }

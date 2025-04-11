@@ -14,7 +14,7 @@ describe('Worker tests', () => {
     return WorkerManager.init(workerModule, { workerCount });
   }
 
-  beforeEach(async () => {
+  beforeAll(async () => {
     addKnownErrorConstructor(MyCustomError);
     console.time('worker manager init');
     const manager = await initWorkerManager();
@@ -22,17 +22,8 @@ describe('Worker tests', () => {
     workerManager = manager;
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await workerManager.close();
-  });
-
-  test('worker task throws with non-Error value', async () => {
-    const [res] = await Promise.allSettled([
-      // The worker will throw a non-error value when it receives req value 3333
-      workerManager.exec(3333, 1),
-    ]);
-    assert(res.status === 'rejected');
-    expect(res.reason).toBe('boom');
   });
 
   test('run tasks with workers', async () => {
@@ -55,16 +46,61 @@ describe('Worker tests', () => {
     expect(watch.getElapsed()).toBeLessThan(cpuPeggedTimeMs * 1.75);
 
     // Ensure tasks returned in expected order:
-    for (let i = 0; i < workerCount - 1; i++) {
+    for (let i = 0; i < workerCount; i++) {
       const result = results[i];
       assert(result.status === 'fulfilled');
       expect(result.value).toBe(i.toString());
     }
+  });
 
+  test('worker task throws with non-Error value', async () => {
+    const [res] = await Promise.allSettled([
+      // The worker will throw a non-error value when it receives this specific req value
+      workerManager.exec(3333, 1),
+    ]);
+    assert(res.status === 'rejected');
+    expect(res.reason).toBe('boom');
+  });
+
+  test('worker task throws error', async () => {
     // Test that error de/ser across worker thread boundary works as expected
-    const rejectedResult = results[3];
-    assert(rejectedResult.status === 'rejected');
-    expect(rejectedResult.reason).toBeInstanceOf(MyCustomError);
+    const [res] = await Promise.allSettled([
+      // The worker will throw an error when it receives this specific req value
+      workerManager.exec(2222, 1),
+    ]);
+    assert(res.status === 'rejected');
+    expect(res.reason).toBeInstanceOf(MyCustomError);
+    expect(res.reason).toMatchObject({
+      name: 'MyCustomError',
+      message: 'Error at req',
+      code: 123,
+      stack: expect.any(String),
+      randoProp: {
+        foo: 'bar',
+        baz: 123,
+        aggregate: [
+          {
+            name: 'Error',
+            message: 'Error in aggregate 1',
+            inner1code: 123,
+            stack: expect.any(String),
+          },
+          {
+            name: 'MyCustomError',
+            message: 'Error in aggregate 2',
+            stack: expect.any(String),
+          },
+        ],
+        sourceError: {
+          name: 'MyCustomError',
+          message: 'Source error',
+          sourceErrorInfo: {
+            code: 44,
+          },
+          stack: expect.any(String),
+        },
+      },
+    });
   });
 
   test('run tasks on main thread', async () => {
@@ -79,8 +115,11 @@ describe('Worker tests', () => {
     // they are run synchronously on the main thread.
     expect(watch.getElapsed()).toBeGreaterThanOrEqual(workerCount * cpuPeggedTimeMs);
 
-    const rejectedResult = results[3];
-    assert(rejectedResult.status === 'rejected');
-    expect(rejectedResult.reason).toBeInstanceOf(MyCustomError);
+    // Ensure tasks returned in expected order:
+    for (let i = 0; i < workerCount; i++) {
+      const result = results[i];
+      assert(result.status === 'fulfilled');
+      expect(result.value).toBe(i.toString());
+    }
   });
 });

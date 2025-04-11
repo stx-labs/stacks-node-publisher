@@ -78,6 +78,14 @@ export class WorkerManager<TReq, TResp> {
     workersReady: [];
   }>();
 
+  get idleWorkerCount() {
+    return this.idleWorkers.length;
+  }
+
+  get queuedJobCount() {
+    return this.jobQueue.length;
+  }
+
   public static init<TReq, TResp>(
     workerModule: WorkerPoolModuleInterface<TReq, TResp>,
     opts: { workerCount?: number } = {}
@@ -134,11 +142,11 @@ export class WorkerManager<TReq, TResp> {
       };
       if (path.extname(__filename) === '.ts') {
         if (process.env.NODE_ENV !== 'test') {
-          console.error(
-            'Worker threads are being created with ts-node outside of a test environment.'
+          throw new Error(
+            'Worker threads are being created with ts-node outside of a test environment'
           );
         }
-        workerOpt.execArgv = ['-r', 'ts-node/register'];
+        workerOpt.execArgv = ['-r', 'ts-node/register/transpile-only'];
       }
       const worker = new WorkerThreads.Worker(__filename, workerOpt);
       worker.unref();
@@ -149,32 +157,38 @@ export class WorkerManager<TReq, TResp> {
       worker.on('messageerror', err => {
         console.error(`Worker message error`, err);
       });
-      worker.on('message', (message: unknown) => {
-        if (message === 'ready') {
-          this.idleWorkers.push(worker);
-          this.assignJobs();
-          workersReady++;
-          if (workersReady === this.workerCount) {
-            this.events.emit('workersReady');
-          }
-        } else {
-          this.idleWorkers.push(worker);
-          this.assignJobs();
-          const msg = message as WorkerRespMsg<TResp>;
-          const replyWaiter = this.msgRequests.get(msg.msgId);
-          if (replyWaiter) {
-            if (msg.error) {
-              replyWaiter.reject(deserializeError(msg.error));
-            } else if (msg.resp) {
-              replyWaiter.resolve(msg.resp);
-            }
-            this.msgRequests.delete(msg.msgId);
-          } else {
-            console.error('Received unexpected message from worker', msg);
-          }
+      worker.once('message', (message: unknown) => {
+        if (message !== 'ready') {
+          throw new Error(`Unexpected first msg from worker thread: ${JSON.stringify(message)}`);
+        }
+        this.setupWorkerHandler(worker);
+        this.idleWorkers.push(worker);
+        this.assignJobs();
+        workersReady++;
+        if (workersReady === this.workerCount) {
+          this.events.emit('workersReady');
         }
       });
     }
+  }
+
+  private setupWorkerHandler(worker: WorkerThreads.Worker) {
+    worker.on('message', (message: unknown) => {
+      this.idleWorkers.push(worker);
+      this.assignJobs();
+      const msg = message as WorkerRespMsg<TResp>;
+      const replyWaiter = this.msgRequests.get(msg.msgId);
+      if (replyWaiter) {
+        if (msg.error) {
+          replyWaiter.reject(deserializeError(msg.error));
+        } else if (msg.resp) {
+          replyWaiter.resolve(msg.resp);
+        }
+        this.msgRequests.delete(msg.msgId);
+      } else {
+        console.error('Received unexpected message from worker', msg);
+      }
+    });
   }
 
   private assignJobs() {

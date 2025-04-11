@@ -1,21 +1,16 @@
-import { addKnownErrorConstructor } from './error-serialize';
-
-function processTask(req: number) {
-  if (req === 5) {
-    throw createError();
-  }
-  let res = 2;
-  // for (let i = 0; i < 100_000_000; i++) {
-  for (let i = 0; i < 100; i++) {
-    res = i + req;
-  }
-  return res.toString();
+/** Block the thread for `ms` milliseconds */
+function sleepSync(ms: number) {
+  const int32 = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(int32, 0, 0, ms);
 }
 
-export default {
-  workerModule: module,
-  processTask,
-};
+function processTask(req: number) {
+  sleepSync(500);
+  if (req === 3) {
+    throw createError();
+  }
+  return req.toString();
+}
 
 export class MyCustomError extends Error {
   constructor(message?: string) {
@@ -23,18 +18,19 @@ export class MyCustomError extends Error {
     this.name = this.constructor.name;
   }
 }
-addKnownErrorConstructor(MyCustomError);
 
 function createError() {
-  const createInternalError = () => {
-    const error = new MyCustomError(`Error at req`);
-    Object.assign(error, { code: 123 });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
-    (error as any).randoProp = {
-      foo: 'bar',
-      baz: 123,
-    };
-    return error;
+  const error = new MyCustomError(`Error at req`);
+  Object.assign(error, { code: 123 });
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+  (error as any).randoProp = {
+    foo: 'bar',
+    baz: 123,
   };
-  return createInternalError();
+  return error;
 }
+
+export default {
+  workerModule: module,
+  processTask,
+};

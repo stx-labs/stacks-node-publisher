@@ -1,15 +1,19 @@
-import { timeout } from '@hirosystems/api-toolkit';
-import * as events from 'node:events';
+import * as assert from 'node:assert/strict';
 import { WorkerManager } from '../../src/worker-stuff/parent';
 import workerModule, { MyCustomError } from '../../src/worker-stuff/my-worker';
 import { addKnownErrorConstructor } from '../../src/worker-stuff/error-serialize';
+import { stopwatch } from '@hirosystems/api-toolkit';
 
 describe('Worker tests', () => {
   let workerManager: WorkerManager<number, string>;
+  const workerCount = 4;
+  const cpuPeggedTimeMs = 500;
 
   beforeEach(async () => {
     addKnownErrorConstructor(MyCustomError);
-    const manager = await WorkerManager.init(workerModule);
+    console.time('worker manager init');
+    const manager = await WorkerManager.init(workerModule, { workerCount });
+    console.timeEnd('worker manager init');
     workerManager = manager;
   });
 
@@ -17,33 +21,41 @@ describe('Worker tests', () => {
     await workerManager.close();
   });
 
-  test('worker debugging', async () => {
+  test('run tasks with workers', async () => {
+    const watch = stopwatch();
     const results = await Promise.allSettled(
-      Array.from({ length: 10 }, (_, i) => {
-        return workerManager.exec(i);
+      Array.from({ length: workerCount }, async (_, i) => {
+        console.time(`task ${i}`);
+        const res = await workerManager.exec(i);
+        console.timeEnd(`task ${i}`);
+        return res;
       })
     );
-    const ff = results[5];
-    if (ff.status === 'rejected') {
-      const err = ff.reason;
-      const isCorrect = err instanceof MyCustomError;
-      console.log('isCorrect', isCorrect);
-    }
-    console.log(results);
+
+    // All tasks should complete roughly within the time in takes for one task to complete
+    // because the tasks are run in parallel on different threads.
+    expect(watch.getElapsed()).toBeLessThan(cpuPeggedTimeMs * 1.75);
+
+    // Test that error de/ser across worker thread boundary works as expected
+    const rejectedResult = results[3];
+    assert(rejectedResult.status === 'rejected');
+    expect(rejectedResult.reason).toBeInstanceOf(MyCustomError);
   });
 
-  test('give it to me straight', async () => {
+  test('run tasks on main thread', async () => {
+    const watch = stopwatch();
     const results = await Promise.allSettled(
-      Array.from({ length: 10 }, (_, i) => {
+      Array.from({ length: workerCount }, (_, i) => {
         return Promise.resolve().then(() => workerModule.processTask(i));
       })
     );
-    const ff = results[5];
-    if (ff.status === 'rejected') {
-      const err = ff.reason;
-      const isCorrect = err instanceof MyCustomError;
-      console.log('isCorrect', isCorrect);
-    }
-    console.log(results);
+
+    // All tasks should take at least as long as taskCount * cpuPeggedTimeMs because 
+    // they are run synchronously on the main thread.
+    expect(watch.getElapsed()).toBeGreaterThanOrEqual(workerCount * cpuPeggedTimeMs);
+
+    const rejectedResult = results[3];
+    assert(rejectedResult.status === 'rejected');
+    expect(rejectedResult.reason).toBeInstanceOf(MyCustomError);
   });
 });

@@ -3,48 +3,7 @@ import * as WorkerThreads from 'node:worker_threads';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EventEmitter } from 'node:events';
-import * as SerializeError from 'serialize-error-cjs';
-
-/*
-export default function callsites() {
-  const _prepareStackTrace = Error.prepareStackTrace;
-  try {
-    let result: NodeJS.CallSite[] = [];
-    Error.prepareStackTrace = (_, callSites) => {
-      const callSitesWithoutCurrent = callSites.slice(1);
-      result = callSitesWithoutCurrent;
-      return callSitesWithoutCurrent;
-    };
-    const _err = new Error().stack;
-    return result;
-  } finally {
-    Error.prepareStackTrace = _prepareStackTrace;
-  }
-}
-
-export function callerCallsite({ depth = 0 } = {}) {
-  const callers = [];
-  const callerFileSet = new Set<string>();
-
-  for (const callsite of callsites()) {
-    const fileName = callsite.getFileName();
-    const hasReceiver = callsite.getTypeName() !== null && fileName;
-
-    if (fileName && !callerFileSet.has(fileName)) {
-      callerFileSet.add(fileName);
-      callers.unshift(callsite);
-    }
-
-    if (hasReceiver) {
-      return callers[depth];
-    }
-  }
-}
-*/
-
-type WorkerDataInterface = {
-  workerFile: string;
-};
+import { deserializeError, SerializedError, serializeError } from './error-serialize';
 
 type WorkerPoolModuleInterface<TReq, TResp> =
   | {
@@ -58,12 +17,16 @@ type WorkerPoolModuleInterface<TReq, TResp> =
       };
     };
 
+type WorkerDataInterface = {
+  workerFile: string;
+};
+
 type WorkerReqMsg<TReq> = {
   msgId: number;
   req: TReq;
 };
 
-type WorkerRespMsg<TResp, TErr = SerializeError.SerializedError> = {
+type WorkerRespMsg<TResp, TErr = SerializedError> = {
   msgId: number;
 } & (
   | {
@@ -194,21 +157,21 @@ export class WorkerManager<TReq, TResp> {
           if (workersReady === this.workerCount) {
             this.events.emit('workersReady');
           }
-          return;
-        }
-        this.idleWorkers.push(worker);
-        this.assignJobs();
-        const msg = message as WorkerRespMsg<TResp>;
-        const replyWaiter = this.msgRequests.get(msg.msgId);
-        if (replyWaiter) {
-          if (msg.error) {
-            replyWaiter.reject(SerializeError.deserializeError(msg.error));
-          } else if (msg.resp) {
-            replyWaiter.resolve(msg.resp);
-          }
-          this.msgRequests.delete(msg.msgId);
         } else {
-          console.error('Received unexpected message from worker', msg);
+          this.idleWorkers.push(worker);
+          this.assignJobs();
+          const msg = message as WorkerRespMsg<TResp>;
+          const replyWaiter = this.msgRequests.get(msg.msgId);
+          if (replyWaiter) {
+            if (msg.error) {
+              replyWaiter.reject(deserializeError(msg.error));
+            } else if (msg.resp) {
+              replyWaiter.resolve(msg.resp);
+            }
+            this.msgRequests.delete(msg.msgId);
+          } else {
+            console.error('Received unexpected message from worker', msg);
+          }
         }
       });
     }
@@ -224,11 +187,8 @@ export class WorkerManager<TReq, TResp> {
   }
 
   async close() {
-    await Promise.all(
-      [...this.workers].map(worker => {
-        return worker.terminate().then(() => this.workers.delete(worker));
-      })
-    );
+    await Promise.all([...this.workers].map(worker => worker.terminate()));
+    this.workers.clear();
   }
 }
 
@@ -237,13 +197,12 @@ if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterf
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const workerModule = require(workerFile) as WorkerPoolModuleInterface<unknown, unknown>;
   const parentPort = WorkerThreads.parentPort as WorkerThreads.MessagePort;
-  const processTask = (() => {
-    if ('default' in workerModule) {
-      return workerModule.default.processTask;
-    } else {
-      return workerModule.processTask;
-    }
-  })();
+  let processTask: (req: unknown) => unknown;
+  if ('default' in workerModule) {
+    processTask = workerModule.default.processTask;
+  } else {
+    processTask = workerModule.processTask;
+  }
   parentPort.on('messageerror', err => {
     console.error(`Worker thread message error`, err);
   });
@@ -264,7 +223,7 @@ if (!WorkerThreads.isMainThread && (WorkerThreads.workerData as WorkerDataInterf
           console.error(`Worker thread message error`, result.err);
           const reply: WorkerRespMsg<unknown> = {
             msgId: msg.msgId,
-            error: SerializeError.serializeError(result.err as Error),
+            error: serializeError(result.err as Error),
           };
           parentPort.postMessage(reply);
         }

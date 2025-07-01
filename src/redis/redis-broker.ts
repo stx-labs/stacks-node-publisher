@@ -7,8 +7,9 @@ import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
 
-enum StreamType {
-  ALL = 'all',
+enum StacksMessageType {
+  chainEvent,
+  signerEvent,
 }
 
 type StacksMessage = {
@@ -17,6 +18,24 @@ type StacksMessage = {
   eventPath: string;
   eventBody: string;
 };
+
+function getMessageTypeFromPath(eventPath: string): StacksMessageType {
+  if (eventPath.startsWith('/stackerdb_chunks') || eventPath.startsWith('/proposal_response')) {
+    return StacksMessageType.signerEvent;
+  } else {
+    return StacksMessageType.chainEvent;
+  }
+}
+
+function isMessageTypeForStream(messageType: StacksMessageType, streamType: string) {
+  if (streamType === 'chain_events') {
+    return messageType === StacksMessageType.chainEvent;
+  } else if (streamType === 'signer_events') {
+    return messageType === StacksMessageType.signerEvent;
+  } else {
+    return true;
+  }
+}
 
 export class RedisBroker {
   client: RedisClient;
@@ -301,8 +320,9 @@ export class RedisBroker {
           const clientId = msgPayload['client_id'];
           const lastMessageId = msgPayload['last_message_id'];
           const appName = msgPayload['app_name'];
+          const streamType = msgPayload['stream_type'];
           this.logger.info(
-            `New client connection: ${clientId}, app: ${appName}, lastMessageId: ${lastMessageId})`
+            `New client connection: ${clientId}, app: ${appName}, lastMessageId: ${lastMessageId}, streamType: ${streamType})`
           );
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
@@ -320,7 +340,13 @@ export class RedisBroker {
               logger.error(err, `Redis error on dedicated client connection for client`);
             }
           });
-          void this.handleClientConnection(dedicatedClient, clientId, lastMessageId, logger)
+          void this.handleClientConnection(
+            dedicatedClient,
+            clientId,
+            lastMessageId,
+            streamType,
+            logger
+          )
             .catch(async (error: unknown) => {
               error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               if ((error as Error).message?.includes('NOGROUP')) {
@@ -359,17 +385,28 @@ export class RedisBroker {
   }
 
   getClientStreamKey(clientId: string) {
-    return `${this.redisStreamKeyPrefix}client:${StreamType.ALL}:${clientId}`;
+    return `${this.redisStreamKeyPrefix}client:all:${clientId}`;
   }
 
   getClientGlobalStreamGroupKey(clientId: string) {
     return `${this.redisStreamKeyPrefix}client_group:${clientId}`;
   }
 
+  /**
+   * Handles a client connection by creating a consumer group for the global stream, backfilling
+   * messages from postgres, and then starting to live-stream messages from the global stream to the
+   * client's stream.
+   * @param client - The redis client to use for the connection
+   * @param clientId - The ID of the client
+   * @param lastMessageId - The last message ID to backfill from
+   * @param streamType - The type of stream to backfill
+   * @param logger - The logger to use for logging
+   */
   async handleClientConnection(
     client: typeof this.client,
     clientId: string,
     lastMessageId: string,
+    streamType: string,
     logger: typeof this.logger
   ) {
     await client.connect();
@@ -453,16 +490,19 @@ export class RedisBroker {
         break;
       }
 
-      // xAdd all msgs at once
+      // xAdd all msgs at once, filtering by message type depending on the stream type
       let multi = client.multi();
       for (const row of dbResults) {
         const messageId = `${row.sequence_number}-0`;
-        const redisMsg = {
-          timestamp: row.timestamp,
-          path: row.path,
-          body: row.content,
-        };
-        multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
+        const messageType = getMessageTypeFromPath(row.path);
+        if (isMessageTypeForStream(messageType, streamType)) {
+          const redisMsg = {
+            timestamp: row.timestamp,
+            path: row.path,
+            body: row.content,
+          };
+          multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
+        }
       }
       await multi.exec();
 
@@ -534,9 +574,13 @@ export class RedisBroker {
             );
             let multi = client.multi();
             for (const { id, message } of stream.messages) {
-              multi = multi
-                // Process message (send to client)
-                .xAdd(clientStreamKey, id, message);
+              // Filter messages based on message type
+              const messageType = getMessageTypeFromPath(message.path);
+              if (isMessageTypeForStream(messageType, streamType)) {
+                multi = multi
+                  // Process message (send to client)
+                  .xAdd(clientStreamKey, id, message);
+              }
             }
             // Acknowledge message for this consumer group
             multi = multi.xAck(this.globalStreamKey, groupKey, lastReceivedMsgId);

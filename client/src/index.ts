@@ -7,6 +7,7 @@ export type StreamedStacksEventCallback = (
   id: string,
   timestamp: string,
   path: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: any
 ) => Promise<void>;
 
@@ -166,6 +167,7 @@ export class StacksEventStream {
       client_id: this.clientId,
       last_message_id: this.lastMessageId,
       app_name: this.appName,
+      stream_type: this.eventStreamType,
     };
 
     await this.client

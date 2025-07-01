@@ -12,6 +12,7 @@ import {
   withTimeout,
 } from './utils';
 import { waiter } from '@hirosystems/api-toolkit';
+import { StacksEventStreamType } from '../../client/src';
 
 describe('Multiple clients tests', () => {
   let db: PgStore;
@@ -58,8 +59,16 @@ describe('Multiple clients tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client1 = await createTestClient(lastDbMsg?.sequence_number, fail);
-      const client2 = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client1 = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
+      const client2 = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       lastDbMsg = await db.getLastMessage();
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
@@ -140,14 +149,22 @@ describe('Multiple clients tests', () => {
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
 
       // Client 1 will start from and ealier message than client 2
-      const client1 = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client1 = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
       lastDbMsg = await db.getLastMessage();
       // Client 2 will start from the latest message
-      const client2 = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client2 = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
       const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();

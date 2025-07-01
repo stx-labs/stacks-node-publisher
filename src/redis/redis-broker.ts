@@ -322,7 +322,7 @@ export class RedisBroker {
           const appName = msgPayload['app_name'];
           const streamType = msgPayload['stream_type'];
           this.logger.info(
-            `New client connection: ${clientId}, app: ${appName}, lastMessageId: ${lastMessageId}, streamType: ${streamType})`
+            `New client connection: ${clientId}, app: ${appName}, lastMessageId: ${lastMessageId}, streamType: ${streamType}`
           );
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
@@ -464,6 +464,13 @@ export class RedisBroker {
           content
         FROM messages
         WHERE sequence_number > ${lastQueriedSequenceNumber}
+          ${
+            streamType === 'all'
+              ? this.db.sql``
+              : streamType === 'signer_events'
+                ? this.db.sql`AND path IN ('/stackerdb_chunks', '/proposal_response')`
+                : this.db.sql`AND path NOT IN ('/stackerdb_chunks', '/proposal_response')`
+          }
         ORDER BY sequence_number ASC
         LIMIT ${ENV.DB_MSG_BATCH_SIZE}
       `.catch((error: unknown) => {
@@ -490,19 +497,16 @@ export class RedisBroker {
         break;
       }
 
-      // xAdd all msgs at once, filtering by message type depending on the stream type
+      // xAdd all msgs at once. These were already filtered by message type depending on the stream type.
       let multi = client.multi();
       for (const row of dbResults) {
         const messageId = `${row.sequence_number}-0`;
-        const messageType = getMessageTypeFromPath(row.path);
-        if (isMessageTypeForStream(messageType, streamType)) {
-          const redisMsg = {
-            timestamp: row.timestamp,
-            path: row.path,
-            body: row.content,
-          };
-          multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
-        }
+        const redisMsg = {
+          timestamp: row.timestamp,
+          path: row.path,
+          body: row.content,
+        };
+        multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
       }
       await multi.exec();
 

@@ -30,12 +30,13 @@ export async function closeTestClients() {
 
 export async function createTestClient(
   lastMsgId = '0',
+  streamType: StacksEventStreamType = StacksEventStreamType.all,
   onSequentialMsgError: (error: Error) => void
 ) {
   const callerLine = getCallerLine();
   const client = new StacksEventStream({
     redisUrl: ENV.REDIS_URL,
-    eventStreamType: StacksEventStreamType.all,
+    eventStreamType: streamType,
     lastMessageId: lastMsgId,
     redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
     appName: 'snp-client-test',
@@ -46,7 +47,8 @@ export async function createTestClient(
   let lastReceivedMsgId = parseInt(client.lastMessageId.split('-')[0]);
   client.events.on('msgReceived', ({ id }) => {
     const msgId = parseInt(id.split('-')[0]);
-    if (msgId !== lastReceivedMsgId + 1) {
+    // Validate that the msg ids are sequential for 'all' stream type.
+    if (streamType === StacksEventStreamType.all && msgId !== lastReceivedMsgId + 1) {
       onSequentialMsgError(
         new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
       );

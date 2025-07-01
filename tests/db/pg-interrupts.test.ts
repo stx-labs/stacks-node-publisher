@@ -14,6 +14,7 @@ import {
 } from './utils';
 import { once } from 'node:events';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { StacksEventStreamType } from '../../client/src';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;
@@ -143,7 +144,11 @@ describe('Postgres interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       let backfillQueries = 0;
       const onBackfillQueryError = waiter<{ msgId: string }>();

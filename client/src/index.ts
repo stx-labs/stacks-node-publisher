@@ -160,7 +160,7 @@ export class StacksEventStream {
     // for any previous connections.
     this.clientId = randomUUID();
     this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
-    const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
+    const streamKey = `${this.redisStreamPrefix}client:all:${this.clientId}`;
     await this.client.clientSetName(this.redisClientName);
 
     const handshakeMsg = {

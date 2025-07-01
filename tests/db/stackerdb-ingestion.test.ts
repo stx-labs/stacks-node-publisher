@@ -15,6 +15,7 @@ import {
   testWithFailCb,
   withTimeout,
 } from './utils';
+import { StacksEventStreamType } from '../../client/src';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;
@@ -75,7 +76,7 @@ describe('Stackerdb ingestion tests', () => {
       const lastDbMsg = await db.getLastMessage();
       assert(lastDbMsg);
       const lastDbMsgId = parseInt(lastDbMsg.sequence_number.split('-')[0]);
-      const client = await createTestClient(undefined, error => {
+      const client = await createTestClient(undefined, StacksEventStreamType.all, error => {
         fail(error);
       });
 
@@ -94,6 +95,35 @@ describe('Stackerdb ingestion tests', () => {
       });
 
       await withTimeout(allMsgsReceivedWaiter, 60_000);
+
+      await client.stop();
+    });
+  }, 60_000);
+
+  test('stream messages filtered by stream type', async () => {
+    await testWithFailCb(async fail => {
+      const lastDbMsg = await db.getLastMessage();
+      assert(lastDbMsg);
+      const client = await createTestClient(undefined, StacksEventStreamType.chainEvents, error => {
+        fail(error);
+      });
+
+      const allMsgsReceivedWaiter = waiter();
+
+      let messagesReceived = 0;
+      client.start((id, _timestamp, path) => {
+        messagesReceived++;
+        if (id === '5399-0') {
+          allMsgsReceivedWaiter.finish();
+        }
+        if (path === '/stackerdb_chunks' || path === '/proposal_response') {
+          fail(new Error(`Unexpected message received: ${path}`));
+        }
+        return Promise.resolve();
+      });
+
+      await withTimeout(allMsgsReceivedWaiter, 60_000);
+      assert.equal(messagesReceived, 1430);
 
       await client.stop();
     });

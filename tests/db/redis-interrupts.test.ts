@@ -16,6 +16,7 @@ import {
   withTimeout,
 } from './utils';
 import { once } from 'node:events';
+import { StacksEventStreamType } from '../../client/src';
 
 describe('Redis interrupts', () => {
   let db: PgStore;
@@ -89,7 +90,11 @@ describe('Redis interrupts', () => {
   test('client connect succeeds once redis is available', async () => {
     await testWithFailCb(async fail => {
       const lastDbMsg = await db.getLastMessage();
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
       const testMsg1 = { test: randomUUID() };
       let lastMsgWaiter = waiter<any>();
       client.start((_id, _timestamp, _path, body) => {
@@ -150,7 +155,11 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const addRedisMsgThrow = waiter<{ msgId: string }>();
       const onRedisAddMsg = redisBroker._testHooks!.onAddStacksMsg.register(async msgId => {
@@ -265,7 +274,11 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       // right after pg data is inserted, wipe redis data before inserting into redis
       const onRedisWiped = waiter<{ msgId: string }>();

@@ -47,6 +47,7 @@ export class PgStore extends BasePgStore {
       await sql`CREATE SCHEMA IF NOT EXISTS ${sql(pgConfig.schema)}`;
     }
     if (opts?.skipMigrations !== true) {
+      logger.info('Running pg migrations, this may take a while...');
       while (true) {
         try {
           await runMigrations(MIGRATIONS_DIR, 'up', pgConfig);

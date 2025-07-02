@@ -7,6 +7,7 @@ export type StreamedStacksEventCallback = (
   id: string,
   timestamp: string,
   path: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: any
 ) => Promise<void>;
 
@@ -159,13 +160,14 @@ export class StacksEventStream {
     // for any previous connections.
     this.clientId = randomUUID();
     this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
-    const streamKey = `${this.redisStreamPrefix}client:${this.eventStreamType}:${this.clientId}`;
+    const streamKey = `${this.redisStreamPrefix}client:${this.clientId}`;
     await this.client.clientSetName(this.redisClientName);
 
     const handshakeMsg = {
       client_id: this.clientId,
       last_message_id: this.lastMessageId,
       app_name: this.appName,
+      stream_type: this.eventStreamType,
     };
 
     await this.client

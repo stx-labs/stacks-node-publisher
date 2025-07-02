@@ -15,6 +15,7 @@ import {
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { StacksEventStreamType } from '../../client/src';
 
 describe('Live-stream tests', () => {
   let db: PgStore;
@@ -82,7 +83,11 @@ describe('Live-stream tests', () => {
 
       // As soon as the client starts live-streaming, stall the client for MAX_IDLE_TIME_MS
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
       client.start(async (_id, _timestamp, _path, _body) => {
         if (onLivestreamingHit.isFinished) {
           onLivestreamingHit = waiter();
@@ -215,7 +220,11 @@ describe('Live-stream tests', () => {
 
       const msgEvents = new EventEmitter();
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
       client.start(async (id, _timestamp, _path, _body) => {
         msgEvents.emit('msg', id);
         if (onLivestreamHit.isFinished) {
@@ -315,7 +324,11 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -418,7 +431,11 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -543,7 +560,11 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -661,7 +682,11 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(

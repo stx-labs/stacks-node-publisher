@@ -15,6 +15,7 @@ import {
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { StacksEventStreamType } from '../../client/src';
 
 describe('Backfill tests', () => {
   let db: PgStore;
@@ -64,7 +65,11 @@ describe('Backfill tests', () => {
       });
 
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
       client.start(async (_id, _timestamp, _path, _body) => {
         if (backfillHit.isFinished) {
           backfillHit = waiter();
@@ -184,7 +189,11 @@ describe('Backfill tests', () => {
 
       const msgEvents = new EventEmitter();
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
       client.start(async (id, _timestamp, _path, _body) => {
         msgEvents.emit('msg', id);
         if (backfillHit.isFinished) {
@@ -283,7 +292,11 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -373,7 +386,11 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -474,7 +491,11 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -579,7 +600,11 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -673,7 +698,11 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(lastDbMsg?.sequence_number, fail);
+      const client = await createTestClient(
+        lastDbMsg?.sequence_number,
+        StacksEventStreamType.all,
+        fail
+      );
 
       const onTransitionToLive = waiter();
       const transitionMsgPayload = { msg: 'msg added during backfill to livestream transition' };

@@ -1,3 +1,9 @@
+## [1.1.2-beta.1](https://github.com/hirosystems/salt-n-pepper/compare/v1.1.1...v1.1.2-beta.1) (2025-07-02)
+
+### Bug Fixes
+
+* filter events sent to clients based on selected event stream type ([#27](https://github.com/hirosystems/salt-n-pepper/issues/27)) ([995e639](https://github.com/hirosystems/salt-n-pepper/commit/995e63931e4cd260fc680bc7a2d948cfd6711000))
+
 ## [1.1.1](https://github.com/hirosystems/salt-n-pepper/compare/v1.1.0...v1.1.1) (2025-04-01)
 
 ### Bug Fixes

@@ -385,7 +385,7 @@ export class RedisBroker {
   }
 
   getClientStreamKey(clientId: string) {
-    return `${this.redisStreamKeyPrefix}client:all:${clientId}`;
+    return `${this.redisStreamKeyPrefix}client:${clientId}`;
   }
 
   getClientGlobalStreamGroupKey(clientId: string) {

@@ -6,11 +6,7 @@ import { createTestHook, isTestEnv } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
-
-enum StacksMessageType {
-  chainEvent,
-  signerEvent,
-}
+import { StacksEventStreamType } from '../../client/src';
 
 type StacksMessage = {
   timestamp: string;
@@ -19,21 +15,43 @@ type StacksMessage = {
   eventBody: string;
 };
 
-function getMessageTypeFromPath(eventPath: string): StacksMessageType {
-  if (eventPath.startsWith('/stackerdb_chunks') || eventPath.startsWith('/proposal_response')) {
-    return StacksMessageType.signerEvent;
-  } else {
-    return StacksMessageType.chainEvent;
+function streamTypeFromString(streamType: string): StacksEventStreamType {
+  switch (streamType) {
+    case 'all':
+      return StacksEventStreamType.all;
+    case 'signer_events':
+      return StacksEventStreamType.signerEvents;
+    case 'chain_events':
+      return StacksEventStreamType.chainEvents;
+    case 'confirmed_chain_events':
+      return StacksEventStreamType.confirmedChainEvents;
+    default:
+      throw new Error(`Invalid stream type: ${streamType}`);
   }
 }
 
-function isMessageTypeForStream(messageType: StacksMessageType, streamType: string) {
-  if (streamType === 'chain_events') {
-    return messageType === StacksMessageType.chainEvent;
-  } else if (streamType === 'signer_events') {
-    return messageType === StacksMessageType.signerEvent;
-  } else {
+function isMessageForStream(path: string, streamType: StacksEventStreamType) {
+  if (streamType === StacksEventStreamType.all) {
     return true;
+  }
+  switch (path) {
+    case '/stackerdb_chunks':
+    case '/proposal_response':
+      return streamType === StacksEventStreamType.signerEvents;
+    case '/new_block':
+    case '/new_burn_block':
+      return (
+        streamType === StacksEventStreamType.chainEvents ||
+        streamType === StacksEventStreamType.confirmedChainEvents
+      );
+    case '/attachments/new':
+    case '/new_mempool_tx':
+    case '/drop_mempool_tx':
+    case '/new_microblocks':
+      return streamType === StacksEventStreamType.chainEvents;
+    default:
+      // Forward all unhandled messages by default.
+      return true;
   }
 }
 
@@ -414,6 +432,7 @@ export class RedisBroker {
     const clientStreamKey = this.getClientStreamKey(clientId);
     const groupKey = this.getClientGlobalStreamGroupKey(clientId);
     const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
+    const streamTypeEnum = streamTypeFromString(streamType);
 
     // We need to create a unique redis stream for this client, then backfill it with messages starting
     // from the lastMessageId provided by the client. Backfilling is performed by reading messages from
@@ -579,8 +598,7 @@ export class RedisBroker {
             let multi = client.multi();
             for (const { id, message } of stream.messages) {
               // Filter messages based on message type
-              const messageType = getMessageTypeFromPath(message.path);
-              if (isMessageTypeForStream(messageType, streamType)) {
+              if (isMessageForStream(message.path, streamTypeEnum)) {
                 multi = multi
                   // Process message (send to client)
                   .xAdd(clientStreamKey, id, message);

@@ -473,6 +473,18 @@ export class RedisBroker {
       //
       // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
       // persisted-storage layer agnostic to whatever storage is used.
+      let messageFilter = this.db.sql``;
+      switch (streamTypeEnum) {
+        case StacksEventStreamType.signerEvents:
+          messageFilter = this.db.sql`AND path IN ('/stackerdb_chunks', '/proposal_response')`;
+          break;
+        case StacksEventStreamType.confirmedChainEvents:
+          messageFilter = this.db.sql`AND path IN ('/new_block', '/new_burn_block')`;
+          break;
+        case StacksEventStreamType.chainEvents:
+          messageFilter = this.db.sql`AND path NOT IN ('/stackerdb_chunks', '/proposal_response')`;
+          break;
+      }
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
       >`
@@ -482,14 +494,7 @@ export class RedisBroker {
           path,
           content
         FROM messages
-        WHERE sequence_number > ${lastQueriedSequenceNumber}
-          ${
-            streamType === 'all'
-              ? this.db.sql``
-              : streamType === 'signer_events'
-                ? this.db.sql`AND path IN ('/stackerdb_chunks', '/proposal_response')`
-                : this.db.sql`AND path NOT IN ('/stackerdb_chunks', '/proposal_response')`
-          }
+        WHERE sequence_number > ${lastQueriedSequenceNumber} ${messageFilter}
         ORDER BY sequence_number ASC
         LIMIT ${ENV.DB_MSG_BATCH_SIZE}
       `.catch((error: unknown) => {

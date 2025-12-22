@@ -100,32 +100,75 @@ describe('Stackerdb ingestion tests', () => {
     });
   }, 60_000);
 
-  test('stream messages filtered by stream type', async () => {
-    await testWithFailCb(async fail => {
-      const lastDbMsg = await db.getLastMessage();
-      assert(lastDbMsg);
-      const client = await createTestClient(undefined, StacksEventStreamType.chainEvents, error => {
-        fail(error);
+  describe('stream messages filtered by stream type', () => {
+    test('chain events', async () => {
+      await testWithFailCb(async fail => {
+        const lastDbMsg = await db.getLastMessage();
+        assert(lastDbMsg);
+        const client = await createTestClient(
+          undefined,
+          StacksEventStreamType.chainEvents,
+          error => {
+            fail(error);
+          }
+        );
+        const allMsgsReceivedWaiter = waiter();
+
+        let messagesReceived = 0;
+        client.start((id, _timestamp, path) => {
+          messagesReceived++;
+          if (id === '5399-0') {
+            allMsgsReceivedWaiter.finish();
+          }
+          if (path === '/stackerdb_chunks' || path === '/proposal_response') {
+            fail(new Error(`Unexpected message received: ${path}`));
+          }
+          return Promise.resolve();
+        });
+
+        await withTimeout(allMsgsReceivedWaiter, 60_000);
+        assert.equal(messagesReceived, 1430);
+
+        await client.stop();
       });
+    }, 60_000);
 
-      const allMsgsReceivedWaiter = waiter();
+    test('confirmed chain events', async () => {
+      await testWithFailCb(async fail => {
+        const lastDbMsg = await db.getLastMessage();
+        assert(lastDbMsg);
+        const client = await createTestClient(
+          undefined,
+          StacksEventStreamType.confirmedChainEvents,
+          error => {
+            fail(error);
+          }
+        );
+        const allMsgsReceivedWaiter = waiter();
 
-      let messagesReceived = 0;
-      client.start((id, _timestamp, path) => {
-        messagesReceived++;
-        if (id === '5399-0') {
-          allMsgsReceivedWaiter.finish();
-        }
-        if (path === '/stackerdb_chunks' || path === '/proposal_response') {
-          fail(new Error(`Unexpected message received: ${path}`));
-        }
-        return Promise.resolve();
+        let messagesReceived = 0;
+        client.start((id, _timestamp, path) => {
+          messagesReceived++;
+          if (id === '5399-0') {
+            allMsgsReceivedWaiter.finish();
+          }
+          if (
+            path === '/stackerdb_chunks' ||
+            path === '/proposal_response' ||
+            path === '/new_mempool_tx' ||
+            path === '/drop_mempool_tx' ||
+            path === '/new_microblocks'
+          ) {
+            fail(new Error(`Unexpected message received: ${path}`));
+          }
+          return Promise.resolve();
+        });
+
+        await withTimeout(allMsgsReceivedWaiter, 60_000);
+        assert.equal(messagesReceived, 1430);
+
+        await client.stop();
       });
-
-      await withTimeout(allMsgsReceivedWaiter, 60_000);
-      assert.equal(messagesReceived, 1430);
-
-      await client.stop();
-    });
-  }, 60_000);
+    }, 60_000);
+  });
 });

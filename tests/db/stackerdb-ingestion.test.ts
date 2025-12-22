@@ -149,7 +149,7 @@ describe('Stackerdb ingestion tests', () => {
         let messagesReceived = 0;
         client.start((id, _timestamp, path) => {
           messagesReceived++;
-          if (id === '5399-0') {
+          if (id === '5396-0') {
             allMsgsReceivedWaiter.finish();
           }
           if (
@@ -157,7 +157,8 @@ describe('Stackerdb ingestion tests', () => {
             path === '/proposal_response' ||
             path === '/new_mempool_tx' ||
             path === '/drop_mempool_tx' ||
-            path === '/new_microblocks'
+            path === '/new_microblocks' ||
+            path === '/attachments/new'
           ) {
             fail(new Error(`Unexpected message received: ${path}`));
           }
@@ -165,7 +166,7 @@ describe('Stackerdb ingestion tests', () => {
         });
 
         await withTimeout(allMsgsReceivedWaiter, 60_000);
-        assert.equal(messagesReceived, 1430);
+        assert.equal(messagesReceived, 983);
 
         await client.stop();
       });

@@ -11,9 +11,17 @@ export type StreamedStacksEventCallback = (
   payload: any
 ) => Promise<void>;
 
+/**
+ * The type of events to ingest depending on the client's Stacks needs.
+ */
 export enum StacksEventStreamType {
+  /** All blockchain and mempool events, excluding signer messages. */
   chainEvents = 'chain_events',
+  /** Only confirmed blockchain events: blocks and burn blocks. */
+  confirmedChainEvents = 'confirmed_chain_events',
+  /** All signer events. */
   signerEvents = 'signer_events',
+  /** All events. */
   all = 'all',
 }
 

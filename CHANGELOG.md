@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/hirosystems/salt-n-pepper/compare/v1.1.2...v1.2.0) (2025-12-23)
+
+### Features
+
+* add stream filter to receive only confirmed chain events ([#34](https://github.com/hirosystems/salt-n-pepper/issues/34)) ([ff65fa8](https://github.com/hirosystems/salt-n-pepper/commit/ff65fa8e6ce25ccc38b83d4a9eb3fd3ba5a0337b))
+
 ## [1.1.2](https://github.com/hirosystems/salt-n-pepper/compare/v1.1.1...v1.1.2) (2025-07-02)
 
 ### Bug Fixes

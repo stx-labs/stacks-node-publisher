@@ -49,6 +49,7 @@ export class StacksEventStream {
   static readonly CONSUMER_NAME = 'primary_consumer';
 
   readonly client: RedisClientType;
+  private readonly eventStreamType: StacksEventStreamType;
   clientId = randomUUID();
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
@@ -67,11 +68,15 @@ export class StacksEventStream {
   }>();
 
   constructor(args: {
+    appName: string;
     redisUrl?: string;
     redisStreamPrefix?: string;
-    appName: string;
-    msgBatchSize?: number;
+    options?: {
+      eventStreamType?: StacksEventStreamType;
+      msgBatchSize?: number;
+    };
   }) {
+    this.eventStreamType = args.options?.eventStreamType ?? StacksEventStreamType.all;
     this.abort = new AbortController();
     this.streamWaiter = waiter();
     this.redisStreamPrefix = args.redisStreamPrefix ?? '';
@@ -79,7 +84,7 @@ export class StacksEventStream {
       this.redisStreamPrefix += ':';
     }
     this.appName = this.sanitizeRedisClientName(args.appName);
-    this.msgBatchSize = args.msgBatchSize ?? 100;
+    this.msgBatchSize = args.options?.msgBatchSize ?? 100;
 
     this.client = createClient({
       url: args.redisUrl,
@@ -134,17 +139,13 @@ export class StacksEventStream {
     }
   }
 
-  start(
-    eventStreamType: StacksEventStreamType,
-    chainTipCallback: StacksChainTipCallback,
-    eventCallback: StacksEventCallback
-  ) {
+  start(chainTipCallback: StacksChainTipCallback, eventCallback: StacksEventCallback) {
     this.logger.info('Starting event stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
           const lastIndexBlockHash = await chainTipCallback();
-          await this.ingestEventStream(lastIndexBlockHash, eventStreamType, eventCallback);
+          await this.ingestEventStream(lastIndexBlockHash, eventCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
             this.logger.info('Event stream ingestion aborted');
@@ -183,7 +184,6 @@ export class StacksEventStream {
 
   private async ingestEventStream(
     lastIndexBlockHash: string | null,
-    eventStreamType: StacksEventStreamType,
     eventCallback: StacksEventCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
@@ -197,7 +197,7 @@ export class StacksEventStream {
       client_id: this.clientId,
       last_index_block_hash: lastIndexBlockHash ?? '',
       app_name: this.appName,
-      stream_type: eventStreamType,
+      stream_type: this.eventStreamType,
     };
 
     // Announce connection to the backend

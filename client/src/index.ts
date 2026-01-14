@@ -4,20 +4,16 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
 /**
- * The arguments for the Stacks event stream.
+ * The callback function for chain tip retrieval. Must return the index block hash of the Stacks
+ * chain tip. If the chain tip is not available, the callback should return null. This callback is
+ * used to determine the starting message ID for the event stream and may be called periodically
+ * to ensure that the event stream is up to date.
  */
-export type StacksEventStreamArgs = {
-  /**
-   * The last index block hash to start from. If not provided, the stream will start from the
-   * beginning.
-   */
-  lastIndexBlockHash?: string;
-  /** The type of events to ingest. */
-  eventStreamType?: StacksEventStreamType;
-};
+export type StacksChainTipCallback = () => Promise<string | null>;
 
 /**
- * The callback function for event stream ingestion.
+ * The callback function for event stream ingestion. Will be called for each message in the event
+ * stream. The callback should return a promise that resolves when the message has been processed.
  */
 export type StacksEventCallback = (
   /** The message ID. */
@@ -138,12 +134,17 @@ export class StacksEventStream {
     }
   }
 
-  start(args: StacksEventStreamArgs, callback: StacksEventCallback) {
+  start(
+    eventStreamType: StacksEventStreamType,
+    chainTipCallback: StacksChainTipCallback,
+    eventCallback: StacksEventCallback
+  ) {
     this.logger.info('Starting event stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
-          await this.ingestEventStream(args, callback);
+          const lastIndexBlockHash = await chainTipCallback();
+          await this.ingestEventStream(lastIndexBlockHash, eventStreamType, eventCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
             this.logger.info('Event stream ingestion aborted');
@@ -181,7 +182,8 @@ export class StacksEventStream {
   }
 
   private async ingestEventStream(
-    args: StacksEventStreamArgs,
+    lastIndexBlockHash: string | null,
+    eventStreamType: StacksEventStreamType,
     eventCallback: StacksEventCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
@@ -193,9 +195,9 @@ export class StacksEventStream {
 
     const handshakeMsg: Record<string, string> = {
       client_id: this.clientId,
-      last_index_block_hash: args.lastIndexBlockHash ?? '',
+      last_index_block_hash: lastIndexBlockHash ?? '',
       app_name: this.appName,
-      stream_type: args.eventStreamType ?? StacksEventStreamType.all,
+      stream_type: eventStreamType,
     };
 
     // Announce connection to the backend

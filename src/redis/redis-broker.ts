@@ -6,7 +6,7 @@ import { createTestHook, isTestEnv } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
-import { StacksEventStreamType } from '../../client/src';
+import { StacksEventStream, StacksEventStreamType } from '../../client/src';
 
 type StacksMessage = {
   timestamp: string;
@@ -336,11 +336,11 @@ export class RedisBroker {
           await listeningClient.xDel(connectionStreamKey, msgId);
 
           const clientId = msgPayload['client_id'];
-          const lastMessageId = msgPayload['last_message_id'];
+          const lastIndexBlockHash = msgPayload['last_index_block_hash'];
           const appName = msgPayload['app_name'];
           const streamType = msgPayload['stream_type'];
           this.logger.info(
-            `New client connection: ${clientId}, app: ${appName}, lastMessageId: ${lastMessageId}, streamType: ${streamType}`
+            `New client connection: ${clientId}, app: ${appName}, lastIndexBlockHash: ${lastIndexBlockHash}, streamType: ${streamType}`
           );
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
@@ -361,7 +361,7 @@ export class RedisBroker {
           void this.handleClientConnection(
             dedicatedClient,
             clientId,
-            lastMessageId,
+            lastIndexBlockHash,
             streamType,
             logger
           )
@@ -416,14 +416,14 @@ export class RedisBroker {
    * client's stream.
    * @param client - The redis client to use for the connection
    * @param clientId - The ID of the client
-   * @param lastMessageId - The last message ID to backfill from
+   * @param lastIndexBlockHash - The last index block hash to backfill from
    * @param streamType - The type of stream to backfill
    * @param logger - The logger to use for logging
    */
   async handleClientConnection(
     client: typeof this.client,
     clientId: string,
-    lastMessageId: string,
+    lastIndexBlockHash: string,
     streamType: string,
     logger: typeof this.logger
   ) {
@@ -434,8 +434,19 @@ export class RedisBroker {
     const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
     const streamTypeEnum = streamTypeFromString(streamType);
 
+    // Resolve the index block hash to a sequence number for backfilling
+    const resolvedSequenceNumber =
+      await this.db.resolveIndexBlockHashToSequenceNumber(lastIndexBlockHash);
+    if (!resolvedSequenceNumber) {
+      logger.warn(
+        `Unable to resolve index block hash ${lastIndexBlockHash} to message sequence number, starting from beginning`
+      );
+    }
+    // Use '0' if no block hash provided or not found (start from beginning)
+    let lastQueriedSequenceNumber = resolvedSequenceNumber ?? '0';
+
     // We need to create a unique redis stream for this client, then backfill it with messages starting
-    // from the lastMessageId provided by the client. Backfilling is performed by reading messages from
+    // from the resolved sequence number. Backfilling is performed by reading messages from
     // postgres, then writing them to the client's redis stream.
     //
     // Once we've backfilled the stream, we can start streaming messages live from the global redis
@@ -449,18 +460,29 @@ export class RedisBroker {
     // The special key `$` instructs redis to hold onto all new messages, which could be added to the stream
     // right after the postgres backfilling is complete, but before we transition to live streaming.
     const msgId = '$';
+
     await client
       .multi()
+      // Create the consumer group on the CLIENT stream for the client to read from.
+      // The client is waiting for this group to be created before it starts reading.
+      .xGroupCreate(
+        clientStreamKey,
+        StacksEventStream.GROUP_NAME,
+        `${lastQueriedSequenceNumber}-0`,
+        { MKSTREAM: true }
+      )
       .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
       .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)
       .incr(this.globalStreamGroupVersionKey)
       .exec();
+    logger.info(
+      `Consumer group created on client stream for client (at sequence ${lastQueriedSequenceNumber})`
+    );
     logger.info(`Consumer group created on global stream for client`);
 
-    // Next, we need to backfill the redis stream with messages from postgres.
-    // NOTE: do not perform the backfilling within a sql transaction because it will use up a connection
-    // from the pool for the duration of the backfilling, which could be a long time for large backfills.
-    let lastQueriedSequenceNumber = lastMessageId.split('-')[0];
+    // Next, we need to backfill the redis stream with messages from postgres. NOTE: do not perform
+    // the backfilling within a sql transaction because it will use up a connection from the pool
+    // for the duration of the backfilling, which could be a long time for large backfills.
     while (!this.abortController.signal.aborted) {
       if (this._testHooks) {
         for (const cb of this._testHooks.onBeforePgBackfillQuery) {

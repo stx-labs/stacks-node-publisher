@@ -3,10 +3,30 @@ import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/a
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
-export type StreamedStacksEventCallback = (
+/**
+ * The arguments for the Stacks event stream.
+ */
+export type StacksEventStreamArgs = {
+  /**
+   * The last index block hash to start from. If not provided, the stream will start from the
+   * beginning.
+   */
+  lastIndexBlockHash?: string;
+  /** The type of events to ingest. */
+  eventStreamType?: StacksEventStreamType;
+};
+
+/**
+ * The callback function for event stream ingestion.
+ */
+export type StacksEventCallback = (
+  /** The message ID. */
   id: string,
+  /** The timestamp of the message. */
   timestamp: string,
+  /** The path of the message. */
   path: string,
+  /** The payload of the message. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: any
 ) => Promise<void>;
@@ -19,17 +39,21 @@ export enum StacksEventStreamType {
   chainEvents = 'chain_events',
   /** Only confirmed blockchain events: blocks and burn blocks. */
   confirmedChainEvents = 'confirmed_chain_events',
-  /** All signer events. */
+  /** Only signer messages. */
   signerEvents = 'signer_events',
   /** All events. */
   all = 'all',
 }
 
+/**
+ * A client for the Stacks SNP event stream.
+ */
 export class StacksEventStream {
+  static readonly GROUP_NAME = 'primary_group';
+  static readonly CONSUMER_NAME = 'primary_consumer';
+
   readonly client: RedisClientType;
-  private readonly eventStreamType: StacksEventStreamType;
   clientId = randomUUID();
-  lastMessageId: string;
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
 
@@ -37,9 +61,6 @@ export class StacksEventStream {
   private readonly streamWaiter: Waiter<void>;
 
   private readonly logger = defaultLogger.child({ module: 'StacksEventStream' });
-
-  private readonly GROUP_NAME = 'primary_group';
-  private readonly CONSUMER_NAME = 'primary_consumer';
   private readonly msgBatchSize: number;
 
   connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
@@ -51,14 +72,10 @@ export class StacksEventStream {
 
   constructor(args: {
     redisUrl?: string;
-    eventStreamType: StacksEventStreamType;
-    lastMessageId?: string;
     redisStreamPrefix?: string;
     appName: string;
     msgBatchSize?: number;
   }) {
-    this.eventStreamType = args.eventStreamType;
-    this.lastMessageId = args.lastMessageId ?? '0'; // Automatically start at the first message.
     this.abort = new AbortController();
     this.streamWaiter = waiter();
     this.redisStreamPrefix = args.redisStreamPrefix ?? '';
@@ -121,12 +138,12 @@ export class StacksEventStream {
     }
   }
 
-  start(callback: StreamedStacksEventCallback) {
+  start(args: StacksEventStreamArgs, callback: StacksEventCallback) {
     this.logger.info('Starting event stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
-          await this.ingestEventStream(callback);
+          await this.ingestEventStream(args, callback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
             this.logger.info('Event stream ingestion aborted');
@@ -163,7 +180,10 @@ export class StacksEventStream {
       });
   }
 
-  private async ingestEventStream(eventCallback: StreamedStacksEventCallback): Promise<void> {
+  private async ingestEventStream(
+    args: StacksEventStreamArgs,
+    eventCallback: StacksEventCallback
+  ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
     // for any previous connections.
     this.clientId = randomUUID();
@@ -171,29 +191,45 @@ export class StacksEventStream {
     const streamKey = `${this.redisStreamPrefix}client:${this.clientId}`;
     await this.client.clientSetName(this.redisClientName);
 
-    const handshakeMsg = {
+    const handshakeMsg: Record<string, string> = {
       client_id: this.clientId,
-      last_message_id: this.lastMessageId,
+      last_index_block_hash: args.lastIndexBlockHash ?? '',
       app_name: this.appName,
-      stream_type: this.eventStreamType,
+      stream_type: args.eventStreamType ?? StacksEventStreamType.all,
     };
 
-    await this.client
-      .multi()
-      // Announce connection
-      .xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg)
-      // Create group for this stream
-      .xGroupCreate(streamKey, this.GROUP_NAME, this.lastMessageId, {
-        MKSTREAM: true,
-      })
-      .exec();
+    // Announce connection to the backend
+    await this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg);
+
+    // Wait for the backend to create the consumer group on our stream.
+    // The backend will resolve the index_block_hash to a sequence number and create the group.
+    this.logger.info('Waiting for backend to create consumer group...');
+    while (!this.abort.signal.aborted) {
+      try {
+        // Try to create a consumer in the group - this will succeed if the group exists
+        await this.client.xGroupCreateConsumer(
+          streamKey,
+          StacksEventStream.GROUP_NAME,
+          StacksEventStream.CONSUMER_NAME
+        );
+        this.logger.info('Consumer group ready, starting to read messages');
+        break;
+      } catch (err) {
+        if ((err as Error).message?.includes('NOGROUP')) {
+          // Group not created yet, wait and retry
+          await timeout(100);
+          continue;
+        }
+        throw err;
+      }
+    }
 
     while (!this.abort.signal.aborted) {
-      // Because we specify the lastMessageId during the announce handshake and the above
-      // xGroupCreate, use '>' here to get the next messages.
+      // The backend creates the group with the correct starting position based on index_block_hash,
+      // so we use '>' here to get only new messages.
       const results = await this.client.xReadGroup(
-        this.GROUP_NAME,
-        this.CONSUMER_NAME,
+        StacksEventStream.GROUP_NAME,
+        StacksEventStream.CONSUMER_NAME,
         {
           key: streamKey,
           id: '>',
@@ -219,14 +255,13 @@ export class StacksEventStream {
             item.message.path,
             JSON.parse(item.message.body)
           );
-          this.lastMessageId = item.id;
 
           this.events.emit('msgReceived', { id: item.id });
 
           await this.client
             .multi()
             // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
-            .xAck(streamKey, this.GROUP_NAME, item.id)
+            .xAck(streamKey, StacksEventStream.GROUP_NAME, item.id)
             // Delete the message from the stream so that it doesn't get reprocessed
             .xDel(streamKey, item.id)
             .exec();

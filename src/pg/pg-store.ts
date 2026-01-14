@@ -109,4 +109,18 @@ export class PgStore extends BasePgStore {
     }
     return dbResults[0];
   }
+
+  public async resolveIndexBlockHashToSequenceNumber(
+    indexBlockHash: string
+  ): Promise<string | null> {
+    if (!indexBlockHash || indexBlockHash === '') return null;
+    const result = await this.sql<{ sequence_number: string }[]>`
+      SELECT sequence_number
+      FROM messages
+      WHERE path = '/new_block'
+        AND content->>'index_block_hash' = ${indexBlockHash}
+      LIMIT 1
+    `;
+    return result[0]?.sequence_number ?? null;
+  }
 }

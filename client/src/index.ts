@@ -145,6 +145,7 @@ export class StacksEventStream {
       while (!this.abort.signal.aborted) {
         try {
           const lastIndexBlockHash = await chainTipCallback();
+          this.logger.info(`Last index block hash: ${lastIndexBlockHash ?? 'null'}`);
           await this.ingestEventStream(lastIndexBlockHash, eventCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
@@ -228,7 +229,7 @@ export class StacksEventStream {
 
     while (!this.abort.signal.aborted) {
       // The backend creates the group with the correct starting position based on index_block_hash,
-      // so we use '>' here to get only new messages.
+      // so we use '>' here to get only messages after the last message ID.
       const results = await this.client.xReadGroup(
         StacksEventStream.GROUP_NAME,
         StacksEventStream.CONSUMER_NAME,

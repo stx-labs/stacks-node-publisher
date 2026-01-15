@@ -74,18 +74,24 @@ describe('Multiple clients tests', () => {
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
       const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
-      client1.start(async (id, _timestamp, _path, _body) => {
-        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
-          client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
+      client1.start(
+        async () => ({ messageId: client1.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+            client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
+          }
+          await Promise.resolve();
         }
-        await Promise.resolve();
-      });
-      client2.start(async (id, _timestamp, _path, _body) => {
-        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
-          client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
+      );
+      client2.start(
+        async () => ({ messageId: client2.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+            client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
+          }
+          await Promise.resolve();
         }
-        await Promise.resolve();
-      });
+      );
 
       // Wait for both clients to finish backfilling
       const [client1OrigId, client2OrigId] = await Promise.all([
@@ -106,7 +112,7 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client1.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (client1.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -117,7 +123,7 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client2.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (client2.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -169,19 +175,25 @@ describe('Multiple clients tests', () => {
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
       const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
-      client1.start(async (id, _timestamp, _path, _body) => {
-        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
-          client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
+      client1.start(
+        async () => ({ messageId: client1.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+            client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
+          }
+          await Promise.resolve();
         }
-        await Promise.resolve();
-      });
-      client2.start(async (id, _timestamp, _path, _body) => {
-        if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
-          client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
+      );
+      client2.start(
+        async () => ({ messageId: client2.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+            client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
+          }
+          await Promise.resolve();
         }
-        await Promise.resolve();
-      });
-      if (client2.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+      );
+      if (client2.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
         client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
       }
 
@@ -204,7 +216,7 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client1.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (client1.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -215,7 +227,7 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client2.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (client2.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });

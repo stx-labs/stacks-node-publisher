@@ -168,31 +168,35 @@ describe('Endpoint tests', () => {
 
     let lastMsgId = '0';
     const client = new StacksEventStream({
-      redisUrl: ENV.REDIS_URL,
-      eventStreamType: StacksEventStreamType.all,
-      lastMessageId: lastMsgId,
-      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
       appName: 'salt-n-pepper-server-client-test',
+      redisUrl: ENV.REDIS_URL,
+      redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+      options: {
+        eventStreamType: StacksEventStreamType.all,
+      },
     });
     await client.connect({ waitForReady: true });
     let messagesProcessed = 0;
     let lastTimestamp = 0;
-    client.start(async (id, timestamp, path, body) => {
-      expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
-      lastMsgId = id;
+    client.start(
+      async () => (lastMsgId === '0' ? null : { messageId: lastMsgId }),
+      async (id: string, timestamp: string, path: string, body: unknown) => {
+        expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
+        lastMsgId = id;
 
-      expect(typeof path).toBe('string');
-      expect(path).not.toBe('');
+        expect(typeof path).toBe('string');
+        expect(path).not.toBe('');
 
-      expect(typeof body).toBe('object');
-      expect(Object.entries(body as object).length).toBeGreaterThan(0);
+        expect(typeof body).toBe('object');
+        expect(Object.entries(body as object).length).toBeGreaterThan(0);
 
-      expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
-      lastTimestamp = parseInt(timestamp);
+        expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
+        lastTimestamp = parseInt(timestamp);
 
-      messagesProcessed++;
-      await Promise.resolve();
-    });
+        messagesProcessed++;
+        await Promise.resolve();
+      }
+    );
     await timeout(500);
     await client.stop();
     expect(messagesProcessed).toBeGreaterThan(0);

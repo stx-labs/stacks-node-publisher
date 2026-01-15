@@ -63,10 +63,13 @@ describe('Prune tests', () => {
       const client = await createTestClient(undefined, StacksEventStreamType.all, fail);
 
       const lastClientMsgId = await new Promise<number>(resolve => {
-        client.start(id => {
-          resolve(parseInt(id.split('-')[0]));
-          return Promise.resolve();
-        });
+        client.start(
+          async () => ({ messageId: client.lastProcessedMessageId }),
+          async (id: string) => {
+            resolve(parseInt(id.split('-')[0]));
+            return Promise.resolve();
+          }
+        );
       });
 
       // One consumer still processing a msg, expect trim to minid of the last msg received
@@ -79,10 +82,13 @@ describe('Prune tests', () => {
         const newClient = await createTestClient(undefined, StacksEventStreamType.all, fail);
         // Wait for the client to receive a message so that we know its group is registered on the server
         await new Promise<void>(resolve => {
-          newClient.start(() => {
-            resolve();
-            return Promise.resolve();
-          });
+          newClient.start(
+            async () => ({ messageId: newClient.lastProcessedMessageId }),
+            async () => {
+              resolve();
+              return Promise.resolve();
+            }
+          );
         });
         await newClient.stop();
         testFn.unregister();

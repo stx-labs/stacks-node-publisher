@@ -97,10 +97,13 @@ describe('Redis interrupts', () => {
       );
       const testMsg1 = { test: randomUUID() };
       let lastMsgWaiter = waiter<any>();
-      client.start((_id, _timestamp, _path, body) => {
-        lastMsgWaiter.finish(body);
-        return Promise.resolve();
-      });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, body: unknown) => {
+          lastMsgWaiter.finish(body);
+          return Promise.resolve();
+        }
+      );
 
       // Client receives msg when redis is available
       await sendTestEvent(eventServer, testMsg1);
@@ -170,13 +173,16 @@ describe('Redis interrupts', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Process all msgs
       lastDbMsg = await db.getLastMessage();
@@ -187,7 +193,7 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -207,7 +213,7 @@ describe('Redis interrupts', () => {
       });
 
       // We expect the client to not have received the message we threw on (simulating redis ingestion failure)
-      expect(parseInt(client.lastMessageId.split('-')[0])).toBeLessThan(
+      expect(parseInt(client.lastProcessedMessageId.split('-')[0])).toBeLessThan(
         parseInt(thrownMsgId.msgId.split('-')[0])
       );
 
@@ -229,7 +235,7 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -289,13 +295,16 @@ describe('Redis interrupts', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Process all msgs
       lastDbMsg = await db.getLastMessage();
@@ -306,7 +315,7 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -347,7 +356,7 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });

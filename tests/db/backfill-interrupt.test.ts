@@ -70,13 +70,16 @@ describe('Backfill tests', () => {
         StacksEventStreamType.all,
         fail
       );
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (backfillHit.isFinished) {
-          backfillHit = waiter();
-          clientStallStartedWaiter.finish();
-          await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (backfillHit.isFinished) {
+            backfillHit = waiter();
+            clientStallStartedWaiter.finish();
+            await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+          }
         }
-      });
+      );
 
       // Wait for the client to begin the msg ingestion stall
       await withTimeout(clientStallStartedWaiter);
@@ -156,7 +159,7 @@ describe('Backfill tests', () => {
               resolve();
             }
           });
-          if (client.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          if (client.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
         })
@@ -194,13 +197,16 @@ describe('Backfill tests', () => {
         StacksEventStreamType.all,
         fail
       );
-      client.start(async (id, _timestamp, _path, _body) => {
-        msgEvents.emit('msg', id);
-        if (backfillHit.isFinished) {
-          clientStallStartedWaiter.finish();
-          await timeout(300);
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+          msgEvents.emit('msg', id);
+          if (backfillHit.isFinished) {
+            clientStallStartedWaiter.finish();
+            await timeout(300);
+          }
         }
-      });
+      );
 
       const msgSender = setInterval(() => {
         void sendTestEvent(eventServer, { test: 'msgPump' });
@@ -316,13 +322,16 @@ describe('Backfill tests', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Wait for client redis connection to be killed during the backfilling process
       await withTimeout(backfillHit);
@@ -337,7 +346,7 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -412,13 +421,16 @@ describe('Backfill tests', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Wait for per-consumer redis client connection to be killed during the backfilling process
       await backfillHit;
@@ -442,7 +454,7 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -521,13 +533,16 @@ describe('Backfill tests', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Wait for redis-broker's global redis client connection to be killed during the backfilling process
       await backfillHit;
@@ -542,7 +557,7 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -559,7 +574,7 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -615,13 +630,16 @@ describe('Backfill tests', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
 
@@ -654,7 +672,7 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -714,19 +732,22 @@ describe('Backfill tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       const onTransitionMsgReceived = waiter();
-      client.start(async (_id, _timestamp, _path, body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
-        }
-        if (!onTransitionMsgReceived.isFinished) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-          if (body.msg === transitionMsgPayload.msg) {
-            onTransitionMsgReceived.finish();
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
           }
+          if (!onTransitionMsgReceived.isFinished) {
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            if ((body as any).msg === transitionMsgPayload.msg) {
+              onTransitionMsgReceived.finish();
+            }
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Wait for first msg received
       const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
@@ -753,7 +774,7 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });

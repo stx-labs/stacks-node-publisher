@@ -88,13 +88,16 @@ describe('Live-stream tests', () => {
         StacksEventStreamType.all,
         fail
       );
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (onLivestreamingHit.isFinished) {
-          onLivestreamingHit = waiter();
-          clientStallStartedWaiter.finish();
-          await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (onLivestreamingHit.isFinished) {
+            onLivestreamingHit = waiter();
+            clientStallStartedWaiter.finish();
+            await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+          }
         }
-      });
+      );
 
       // Wait for the client to begin the msg ingestion stall
       await withTimeout(clientStallStartedWaiter);
@@ -174,7 +177,7 @@ describe('Live-stream tests', () => {
               resolve();
             }
           });
-          if (client.lastMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          if (client.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
         })
@@ -225,13 +228,16 @@ describe('Live-stream tests', () => {
         StacksEventStreamType.all,
         fail
       );
-      client.start(async (id, _timestamp, _path, _body) => {
-        msgEvents.emit('msg', id);
-        if (onLivestreamHit.isFinished) {
-          clientStallStartedWaiter.finish();
-          await timeout(300);
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+          msgEvents.emit('msg', id);
+          if (onLivestreamHit.isFinished) {
+            clientStallStartedWaiter.finish();
+            await timeout(300);
+          }
         }
-      });
+      );
 
       const msgSender = setInterval(() => {
         void sendTestEvent(eventServer, { test: 'msgPump' });
@@ -360,13 +366,16 @@ describe('Live-stream tests', () => {
       );
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Wait for client redis connection to be killed during the live-streaming process
       await withTimeout(livestreamHit);
@@ -381,7 +390,7 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -475,13 +484,16 @@ describe('Live-stream tests', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       await Promise.all([
         // Wait for per-consumer redis client connection to be killed during the live-streaming process
@@ -510,7 +522,7 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -602,13 +614,16 @@ describe('Live-stream tests', () => {
       );
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Wait for redis-broker's global redis client connection to be killed during the live-streaming process
       await livestreamingHit;
@@ -623,7 +638,7 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -640,7 +655,7 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });
@@ -709,13 +724,16 @@ describe('Live-stream tests', () => {
       );
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
 
@@ -748,7 +766,7 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
           resolve();
         }
       });

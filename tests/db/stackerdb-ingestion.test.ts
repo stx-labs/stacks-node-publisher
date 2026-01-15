@@ -83,16 +83,19 @@ describe('Stackerdb ingestion tests', () => {
       const allMsgsReceivedWaiter = waiter();
 
       let lastReceivedMsgId = 0;
-      client.start(id => {
-        const msgId = parseInt(id.split('-')[0]);
-        expect(msgId).toBe(lastReceivedMsgId + 1);
-        lastReceivedMsgId = msgId;
-        // Check if all msgs that are in pg have been received by the client
-        if (msgId === lastDbMsgId) {
-          allMsgsReceivedWaiter.finish();
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (id: string) => {
+          const msgId = parseInt(id.split('-')[0]);
+          expect(msgId).toBe(lastReceivedMsgId + 1);
+          lastReceivedMsgId = msgId;
+          // Check if all msgs that are in pg have been received by the client
+          if (msgId === lastDbMsgId) {
+            allMsgsReceivedWaiter.finish();
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       await withTimeout(allMsgsReceivedWaiter, 60_000);
 
@@ -115,16 +118,19 @@ describe('Stackerdb ingestion tests', () => {
         const allMsgsReceivedWaiter = waiter();
 
         let messagesReceived = 0;
-        client.start((id, _timestamp, path) => {
-          messagesReceived++;
-          if (id === '5399-0') {
-            allMsgsReceivedWaiter.finish();
+        client.start(
+          async () => ({ messageId: client.lastProcessedMessageId }),
+          async (id: string, _timestamp: string, path: string) => {
+            messagesReceived++;
+            if (id === '5399-0') {
+              allMsgsReceivedWaiter.finish();
+            }
+            if (path === '/stackerdb_chunks' || path === '/proposal_response') {
+              fail(new Error(`Unexpected message received: ${path}`));
+            }
+            return Promise.resolve();
           }
-          if (path === '/stackerdb_chunks' || path === '/proposal_response') {
-            fail(new Error(`Unexpected message received: ${path}`));
-          }
-          return Promise.resolve();
-        });
+        );
 
         await withTimeout(allMsgsReceivedWaiter, 60_000);
         assert.equal(messagesReceived, 1430);
@@ -147,23 +153,26 @@ describe('Stackerdb ingestion tests', () => {
         const allMsgsReceivedWaiter = waiter();
 
         let messagesReceived = 0;
-        client.start((id, _timestamp, path) => {
-          messagesReceived++;
-          if (id === '5396-0') {
-            allMsgsReceivedWaiter.finish();
+        client.start(
+          async () => ({ messageId: client.lastProcessedMessageId }),
+          async (id: string, _timestamp: string, path: string) => {
+            messagesReceived++;
+            if (id === '5396-0') {
+              allMsgsReceivedWaiter.finish();
+            }
+            if (
+              path === '/stackerdb_chunks' ||
+              path === '/proposal_response' ||
+              path === '/new_mempool_tx' ||
+              path === '/drop_mempool_tx' ||
+              path === '/new_microblocks' ||
+              path === '/attachments/new'
+            ) {
+              fail(new Error(`Unexpected message received: ${path}`));
+            }
+            return Promise.resolve();
           }
-          if (
-            path === '/stackerdb_chunks' ||
-            path === '/proposal_response' ||
-            path === '/new_mempool_tx' ||
-            path === '/drop_mempool_tx' ||
-            path === '/new_microblocks' ||
-            path === '/attachments/new'
-          ) {
-            fail(new Error(`Unexpected message received: ${path}`));
-          }
-          return Promise.resolve();
-        });
+        );
 
         await withTimeout(allMsgsReceivedWaiter, 60_000);
         assert.equal(messagesReceived, 983);

@@ -35,16 +35,21 @@ export async function createTestClient(
 ) {
   const callerLine = getCallerLine();
   const client = new StacksEventStream({
-    redisUrl: ENV.REDIS_URL,
-    eventStreamType: streamType,
-    lastMessageId: lastMsgId,
-    redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
     appName: 'snp-client-test',
+    redisUrl: ENV.REDIS_URL,
+    redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+    options: {
+      eventStreamType: streamType,
+    },
   });
   await client.connect({ waitForReady: true });
   testClients.add(client);
 
-  let lastReceivedMsgId = parseInt(client.lastMessageId.split('-')[0]);
+  // Set the initial lastProcessedMessageId for sequential validation
+  client.lastProcessedMessageId = lastMsgId;
+
+  // Track the starting message ID for sequential validation
+  let lastReceivedMsgId = parseInt(lastMsgId.split('-')[0]);
   client.events.on('msgReceived', ({ id }) => {
     const msgId = parseInt(id.split('-')[0]);
     // Validate that the msg ids are sequential for 'all' stream type.

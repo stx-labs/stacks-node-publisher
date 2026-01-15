@@ -165,13 +165,16 @@ describe('Postgres interrupts', () => {
       );
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => ({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       const onClientRedisGroupDestroyed = waiter();
       client.events.once('redisConsumerGroupDestroyed', () => {
@@ -200,7 +203,7 @@ describe('Postgres interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
           resolve();
         }
       });

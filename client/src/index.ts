@@ -4,12 +4,28 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
 /**
- * The callback function for chain tip retrieval. Must return the index block hash of the Stacks
- * chain tip. If the chain tip is not available, the callback should return null. This callback is
- * used to determine the starting message ID for the event stream and may be called periodically
- * to ensure that the event stream is up to date.
+ * The starting position for the event stream. Can be either an index block hash with block height
+ * or a message ID.
+ * - `indexBlockHash` + `blockHeight`: The index block hash and height of the Stacks block to start
+ *   from. The backend will resolve this to the corresponding message ID. If the block hash doesn't
+ *   exist but the height is higher than the highest available, it will start from the highest
+ *   available block.
+ * - `messageId`: The message ID to start from. The backend will validate this ID exists and is not
+ *   greater than the highest available ID.
+ *
+ * If neither is provided or validation fails, the stream will start from the beginning.
  */
-export type StacksChainTipCallback = () => Promise<string | null>;
+export type StreamStartingPosition =
+  | { indexBlockHash: string; blockHeight: number }
+  | { messageId: string }
+  | null;
+
+/**
+ * The callback function for retrieving the starting position for the event stream. Should return
+ * either an index block hash with block height or a message ID. This callback is used to determine
+ * the starting message ID for the event stream and may be called periodically on reconnection.
+ */
+export type StreamStartingPositionCallback = () => Promise<StreamStartingPosition>;
 
 /**
  * The callback function for event stream ingestion. Will be called for each message in the event
@@ -59,6 +75,9 @@ export class StacksEventStream {
 
   private readonly logger = defaultLogger.child({ module: 'StacksEventStream' });
   private readonly msgBatchSize: number;
+
+  /** The last message ID that was processed by this client. */
+  lastProcessedMessageId: string = '0';
 
   connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
 
@@ -139,14 +158,17 @@ export class StacksEventStream {
     }
   }
 
-  start(chainTipCallback: StacksChainTipCallback, eventCallback: StacksEventCallback) {
+  start(
+    startingPositionCallback: StreamStartingPositionCallback,
+    eventCallback: StacksEventCallback
+  ) {
     this.logger.info('Starting event stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
-          const lastIndexBlockHash = await chainTipCallback();
-          this.logger.info(`Last index block hash: ${lastIndexBlockHash ?? 'null'}`);
-          await this.ingestEventStream(lastIndexBlockHash, eventCallback);
+          const startingPosition = await startingPositionCallback();
+          this.logger.info(`Starting position: ${JSON.stringify(startingPosition)}`);
+          await this.ingestEventStream(startingPosition, eventCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
             this.logger.info('Event stream ingestion aborted');
@@ -184,7 +206,7 @@ export class StacksEventStream {
   }
 
   private async ingestEventStream(
-    lastIndexBlockHash: string | null,
+    startingPosition: StreamStartingPosition,
     eventCallback: StacksEventCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
@@ -196,7 +218,16 @@ export class StacksEventStream {
 
     const handshakeMsg: Record<string, string> = {
       client_id: this.clientId,
-      last_index_block_hash: lastIndexBlockHash ?? '',
+      last_index_block_hash:
+        startingPosition && 'indexBlockHash' in startingPosition
+          ? startingPosition.indexBlockHash
+          : '',
+      last_block_height:
+        startingPosition && 'blockHeight' in startingPosition
+          ? startingPosition.blockHeight.toString()
+          : '',
+      last_message_id:
+        startingPosition && 'messageId' in startingPosition ? startingPosition.messageId : '',
       app_name: this.appName,
       stream_type: this.eventStreamType,
     };
@@ -259,6 +290,7 @@ export class StacksEventStream {
             JSON.parse(item.message.body)
           );
 
+          this.lastProcessedMessageId = item.id;
           this.events.emit('msgReceived', { id: item.id });
 
           await this.client

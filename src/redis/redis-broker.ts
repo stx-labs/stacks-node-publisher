@@ -336,11 +336,13 @@ export class RedisBroker {
           await listeningClient.xDel(connectionStreamKey, msgId);
 
           const clientId = msgPayload['client_id'];
-          const lastIndexBlockHash = msgPayload['last_index_block_hash'];
+          const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
+          const lastBlockHeight = msgPayload['last_block_height'] ?? '';
+          const lastMessageId = msgPayload['last_message_id'] ?? '';
           const appName = msgPayload['app_name'];
           const streamType = msgPayload['stream_type'];
           this.logger.info(
-            `New client connection: ${clientId}, app: ${appName}, lastIndexBlockHash: ${lastIndexBlockHash}, streamType: ${streamType}`
+            `New client connection: ${clientId}, app: ${appName}, lastIndexBlockHash: ${lastIndexBlockHash}, lastBlockHeight: ${lastBlockHeight}, lastMessageId: ${lastMessageId}, streamType: ${streamType}`
           );
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
@@ -361,7 +363,7 @@ export class RedisBroker {
           void this.handleClientConnection(
             dedicatedClient,
             clientId,
-            lastIndexBlockHash,
+            { lastIndexBlockHash, lastBlockHeight, lastMessageId },
             streamType,
             logger
           )
@@ -416,14 +418,18 @@ export class RedisBroker {
    * client's stream.
    * @param client - The redis client to use for the connection
    * @param clientId - The ID of the client
-   * @param lastIndexBlockHash - The last index block hash to backfill from
+   * @param startingPosition - The starting position containing either lastIndexBlockHash or lastMessageId
    * @param streamType - The type of stream to backfill
    * @param logger - The logger to use for logging
    */
   async handleClientConnection(
     client: typeof this.client,
     clientId: string,
-    lastIndexBlockHash: string,
+    startingPosition: {
+      lastIndexBlockHash: string;
+      lastBlockHeight: string;
+      lastMessageId: string;
+    },
     streamType: string,
     logger: typeof this.logger
   ) {
@@ -434,16 +440,57 @@ export class RedisBroker {
     const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
     const streamTypeEnum = streamTypeFromString(streamType);
 
-    // Resolve the index block hash to a sequence number for backfilling
-    const resolvedSequenceNumber =
-      await this.db.resolveIndexBlockHashToSequenceNumber(lastIndexBlockHash);
-    if (!resolvedSequenceNumber) {
-      logger.warn(
-        `Unable to resolve index block hash ${lastIndexBlockHash} to message sequence number, starting from beginning`
+    // Resolve the starting position to a sequence number for backfilling.
+    // Priority: lastMessageId > lastIndexBlockHash > start from beginning
+    let lastQueriedSequenceNumber: string = '0';
+
+    if (startingPosition.lastMessageId) {
+      // Validate the message ID exists and is not greater than the highest available
+      const validationResult = await this.db.validateAndResolveMessageId(
+        startingPosition.lastMessageId
       );
+      if (validationResult) {
+        lastQueriedSequenceNumber = validationResult.sequenceNumber;
+        if (validationResult.clampedToMax) {
+          logger.info(
+            `Message ID ${startingPosition.lastMessageId} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
+          );
+        } else {
+          logger.info(`Using validated message ID: ${lastQueriedSequenceNumber}-0`);
+        }
+      } else {
+        logger.warn(
+          `Message ID ${startingPosition.lastMessageId} is invalid or database is empty, starting from beginning`
+        );
+      }
+    } else if (startingPosition.lastIndexBlockHash) {
+      // Resolve the index block hash to a sequence number
+      const lastBlockHeight = startingPosition.lastBlockHeight
+        ? parseInt(startingPosition.lastBlockHeight)
+        : undefined;
+      const resolutionResult = await this.db.resolveIndexBlockHashToSequenceNumber(
+        startingPosition.lastIndexBlockHash,
+        lastBlockHeight
+      );
+      if (resolutionResult) {
+        lastQueriedSequenceNumber = resolutionResult.sequenceNumber;
+        if (resolutionResult.clampedToMax) {
+          logger.info(
+            `Block hash ${startingPosition.lastIndexBlockHash} not found but height ${lastBlockHeight} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
+          );
+        } else {
+          logger.info(
+            `Resolved block hash ${startingPosition.lastIndexBlockHash} to sequence number ${lastQueriedSequenceNumber}-0`
+          );
+        }
+      } else {
+        logger.warn(
+          `Unable to resolve index block hash ${startingPosition.lastIndexBlockHash} to message sequence number, starting from beginning`
+        );
+      }
+    } else {
+      logger.info('No starting position provided, starting from beginning');
     }
-    // Use '0' if no block hash provided or not found (start from beginning)
-    let lastQueriedSequenceNumber = resolvedSequenceNumber ?? '0';
 
     // We need to create a unique redis stream for this client, then backfill it with messages starting
     // from the resolved sequence number. Backfilling is performed by reading messages from

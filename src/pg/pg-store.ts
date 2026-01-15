@@ -110,17 +110,89 @@ export class PgStore extends BasePgStore {
     return dbResults[0];
   }
 
+  /**
+   * Resolves an index block hash to a sequence number.
+   * - If the block hash is found, returns its sequence number.
+   * - If the block hash is not found but blockHeight is provided and is higher than the highest
+   *   available block, returns the sequence number of the highest available block (clamped).
+   * - If the block hash is not found and blockHeight is not higher, returns null.
+   */
   public async resolveIndexBlockHashToSequenceNumber(
-    indexBlockHash: string
-  ): Promise<string | null> {
+    indexBlockHash: string,
+    blockHeight?: number
+  ): Promise<{ sequenceNumber: string; clampedToMax: boolean } | null> {
     if (!indexBlockHash || indexBlockHash === '') return null;
-    const result = await this.sql<{ sequence_number: string }[]>`
+
+    // First, try to find the exact block hash
+    const exactMatch = await this.sql<{ sequence_number: string }[]>`
       SELECT sequence_number
       FROM messages
       WHERE path = '/new_block'
         AND content->>'index_block_hash' = ${indexBlockHash}
       LIMIT 1
     `;
-    return result[0]?.sequence_number ?? null;
+    if (exactMatch.count > 0) {
+      return { sequenceNumber: exactMatch[0].sequence_number, clampedToMax: false };
+    }
+
+    // Block hash not found - check if we should clamp to the highest available
+    if (blockHeight !== undefined) {
+      // Get the highest block and its sequence number (sorted by sequence_number, not block_height,
+      // since sequence_number is the canonical ordering)
+      const maxBlock = await this.sql<{ sequence_number: string; block_height: number }[]>`
+        SELECT sequence_number, (content->>'block_height')::int AS block_height
+        FROM messages
+        WHERE path = '/new_block'
+        ORDER BY sequence_number DESC
+        LIMIT 1
+      `;
+      if (maxBlock.count > 0 && blockHeight > maxBlock[0].block_height) {
+        // The requested block height is higher than our highest - clamp to max
+        return { sequenceNumber: maxBlock[0].sequence_number, clampedToMax: true };
+      }
+    }
+
+    // Block hash not found and not eligible for clamping
+    return null;
+  }
+
+  /**
+   * Validates a message ID and returns the resolved sequence number.
+   * - If the message ID is valid (exists or is within range), returns it as-is.
+   * - If the message ID exceeds the highest available, returns the highest available (clamped).
+   * - If the message ID is empty/invalid or no messages exist, returns null.
+   */
+  public async validateAndResolveMessageId(
+    messageId: string
+  ): Promise<{ sequenceNumber: string; clampedToMax: boolean } | null> {
+    if (!messageId || messageId === '') return null;
+
+    // Extract the sequence number from the message ID (format: "sequenceNumber-0")
+    const sequenceNumber = messageId.split('-')[0];
+    if (!sequenceNumber || isNaN(parseInt(sequenceNumber))) {
+      return null;
+    }
+
+    // Check if this sequence number exists or is within the valid range
+    const result = await this.sql<{ max_sequence: string; exists: boolean }[]>`
+      SELECT
+        (SELECT MAX(sequence_number) FROM messages) AS max_sequence,
+        EXISTS(SELECT 1 FROM messages WHERE sequence_number = ${sequenceNumber}) AS exists
+    `;
+    if (result.count === 0 || !result[0].max_sequence) {
+      // No messages in database
+      return null;
+    }
+
+    const maxSequence = BigInt(result[0].max_sequence);
+    const requestedSequence = BigInt(sequenceNumber);
+
+    // If the requested sequence is greater than the max, clamp to max
+    if (requestedSequence > maxSequence) {
+      return { sequenceNumber: result[0].max_sequence, clampedToMax: true };
+    }
+
+    // Return the sequence number (it's valid - either exists or is within range)
+    return { sequenceNumber, clampedToMax: false };
   }
 }

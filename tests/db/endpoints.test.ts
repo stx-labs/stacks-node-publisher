@@ -8,7 +8,7 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { createClient } from 'redis';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { StacksMessageStream, StacksEventStreamType } from '../../client/src';
 import { timeout } from '@hirosystems/api-toolkit';
 import { buildPromServer } from '../../src/prom/prom-server';
 import { FastifyInstance } from 'fastify';
@@ -167,7 +167,7 @@ describe('Endpoint tests', () => {
     });
 
     let lastMsgId = '0';
-    const client = new StacksEventStream({
+    const client = new StacksMessageStream({
       appName: 'salt-n-pepper-server-client-test',
       redisUrl: ENV.REDIS_URL,
       redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,

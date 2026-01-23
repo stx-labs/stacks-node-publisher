@@ -6,7 +6,7 @@ import { createTestHook, isTestEnv } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
-import { SelectedMessagePaths, StacksEventStream } from '../../client/src';
+import { SelectedMessagePaths, StacksMessageStream } from '../../client/src';
 import { MessagePath } from '../../client/src/messages';
 
 type StacksMessage = {
@@ -306,12 +306,7 @@ export class RedisBroker {
               ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
               : '*';
           this.logger.info(
-            {
-              lastIndexBlockHash,
-              lastBlockHeight,
-              lastMessageId,
-              selectedPaths,
-            },
+            msgPayload,
             `RedisBroker new client connection: ${clientId}, app: ${appName}`
           );
 
@@ -483,7 +478,7 @@ export class RedisBroker {
       // The client is waiting for this group to be created before it starts reading.
       .xGroupCreate(
         clientStreamKey,
-        StacksEventStream.GROUP_NAME,
+        StacksMessageStream.GROUP_NAME,
         `${lastQueriedSequenceNumber}-0`,
         { MKSTREAM: true }
       )

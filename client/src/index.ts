@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { Message, MessagePath } from './messages';
 
 /**
- * The starting position for the event stream. Can be either an index block hash with block height
+ * The starting position for the message stream. Can be either an index block hash with block height
  * or a message ID.
  * - `indexBlockHash` + `blockHeight`: The index block hash and height of the Stacks block to start
  *   from. The backend will resolve this to the corresponding message ID. If the block hash doesn't
@@ -42,7 +42,8 @@ export type MessageCallback = (
 ) => Promise<void>;
 
 /**
- * Message paths to include in a message stream. '*' means client wants to receive all messages.
+ * Message paths to include in a message stream, where `*` means client wants to receive all
+ * messages.
  */
 export type SelectedMessagePaths = MessagePath[] | '*';
 
@@ -55,9 +56,9 @@ export type StreamOptions = {
 };
 
 /**
- * A client for the Stacks SNP event stream.
+ * A client for a Stacks core node message stream.
  */
-export class StacksEventStream {
+export class StacksMessageStream {
   static readonly GROUP_NAME = 'primary_group';
   static readonly CONSUMER_NAME = 'primary_consumer';
 
@@ -109,15 +110,15 @@ export class StacksEventStream {
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
     this.client.on('reconnecting', () => {
       this.connectionStatus = 'reconnecting';
-      this.logger.info('Reconnecting to Redis');
+      this.logger.info('StacksMessageStream reconnecting to Redis');
     });
     this.client.on('ready', () => {
       this.connectionStatus = 'connected';
-      this.logger.info('Redis connection ready');
+      this.logger.info('StacksMessageStream Redis connection ready');
     });
     this.client.on('end', () => {
       this.connectionStatus = 'ended';
-      this.logger.info('Redis connection ended');
+      this.logger.info('StacksMessageStream Redis connection ended');
     });
   }
 
@@ -138,10 +139,13 @@ export class StacksEventStream {
       while (true) {
         try {
           await this.client.connect();
-          this.logger.info('Connected to Redis');
+          this.logger.info('StacksMessageStream connected to Redis');
           break;
         } catch (err) {
-          this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+          this.logger.error(
+            err as Error,
+            'StacksMessageStream error connecting to Redis, retrying...'
+          );
           await timeout(500);
         }
       }
@@ -154,16 +158,18 @@ export class StacksEventStream {
   }
 
   start(positionCallback: StreamPositionCallback, messageCallback: MessageCallback) {
-    this.logger.info('Starting event stream ingestion');
+    this.logger.info('StacksMessageStream starting stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
           const startingPosition = await positionCallback();
-          this.logger.info(`Starting position: ${JSON.stringify(startingPosition)}`);
+          this.logger.info(
+            `StacksMessageStream starting position: ${JSON.stringify(startingPosition)}`
+          );
           await this.ingestEventStream(startingPosition, messageCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
-            this.logger.info('Event stream ingestion aborted');
+            this.logger.info('StacksMessageStream stream ingestion aborted');
             break;
           } else if ((error as Error).message?.includes('NOGROUP')) {
             // The redis stream doesn't exist. This can happen if the redis server was restarted,
@@ -172,7 +178,7 @@ export class StacksEventStream {
             // the connection.
             this.logger.error(
               error as Error,
-              `The redis stream group for this client was destroyed by the server`
+              `StacksMessageStream the Redis stream group for this client was destroyed by the server`
             );
             this.events.emit('redisConsumerGroupDestroyed');
             // re-announce connection, re-create group, etc
@@ -180,8 +186,11 @@ export class StacksEventStream {
           } else {
             // TODO: what are other expected errors and how should we handle them? For now we just retry
             // forever.
-            this.logger.error(error as Error, 'Error reading or acknowledging from stream');
-            this.logger.info('Reconnecting to redis stream in 1 second...');
+            this.logger.error(
+              error as Error,
+              'StacksMessageStream error reading or acknowledging from stream'
+            );
+            this.logger.info('StacksMessageStream reconnecting to Redis stream in 1 second...');
             await timeout(1000);
             continue;
           }
@@ -193,7 +202,7 @@ export class StacksEventStream {
         this.streamWaiter.finish();
       })
       .catch((err: unknown) => {
-        this.logger.error(err as Error, 'event ingestion stream error');
+        this.logger.error(err as Error, 'StacksMessageStream ingestion stream error');
       });
   }
 
@@ -204,7 +213,9 @@ export class StacksEventStream {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
     // for any previous connections.
     this.clientId = randomUUID();
-    this.logger.info(`Connecting to redis stream with clientId: ${this.clientId}`);
+    this.logger.info(
+      `StacksMessageStream connecting to Redis stream with clientId: ${this.clientId}`
+    );
     const streamKey = `${this.redisStreamPrefix}client:${this.clientId}`;
     await this.client.clientSetName(this.redisClientName);
 
@@ -229,16 +240,16 @@ export class StacksEventStream {
 
     // Wait for the backend to create the consumer group on our stream.
     // The backend will resolve the index_block_hash to a sequence number and create the group.
-    this.logger.info('Waiting for backend to create consumer group...');
+    this.logger.info('StacksMessageStream waiting for backend to create consumer group...');
     while (!this.abort.signal.aborted) {
       try {
         // Try to create a consumer in the group - this will succeed if the group exists
         await this.client.xGroupCreateConsumer(
           streamKey,
-          StacksEventStream.GROUP_NAME,
-          StacksEventStream.CONSUMER_NAME
+          StacksMessageStream.GROUP_NAME,
+          StacksMessageStream.CONSUMER_NAME
         );
-        this.logger.info('Consumer group ready, starting to read messages');
+        this.logger.info('StacksMessageStream consumer group ready, starting to read messages');
         break;
       } catch (err) {
         if ((err as Error).message?.includes('NOGROUP')) {
@@ -254,8 +265,8 @@ export class StacksEventStream {
       // The backend creates the group with the correct starting position based on index_block_hash,
       // so we use '>' here to get only messages after the last message ID.
       const results = await this.client.xReadGroup(
-        StacksEventStream.GROUP_NAME,
-        StacksEventStream.CONSUMER_NAME,
+        StacksMessageStream.GROUP_NAME,
+        StacksMessageStream.CONSUMER_NAME,
         {
           key: streamKey,
           id: '>',
@@ -271,7 +282,7 @@ export class StacksEventStream {
       for (const stream of results) {
         if (stream.messages.length > 0) {
           this.logger.debug(
-            `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
+            `StacksMessageStream received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
           );
         }
         for (const item of stream.messages) {
@@ -286,7 +297,7 @@ export class StacksEventStream {
           await this.client
             .multi()
             // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
-            .xAck(streamKey, StacksEventStream.GROUP_NAME, item.id)
+            .xAck(streamKey, StacksMessageStream.GROUP_NAME, item.id)
             // Delete the message from the stream so that it doesn't get reprocessed
             .xDel(streamKey, item.id)
             .exec();

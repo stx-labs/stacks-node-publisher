@@ -1,4 +1,4 @@
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { StacksMessageStream, StacksEventStreamType } from '../../client/src';
 import { ENV } from '../../src/env';
 import { EventObserverServer } from '../../src/event-observer/event-server';
 import { RedisClient } from '../../src/redis/redis-types';
@@ -19,7 +19,7 @@ export async function sendTestEvent(
   return res;
 }
 
-const testClients = new Set<StacksEventStream>();
+const testClients = new Set<StacksMessageStream>();
 
 export async function closeTestClients() {
   for (const client of testClients) {
@@ -34,7 +34,7 @@ export async function createTestClient(
   onSequentialMsgError: (error: Error) => void
 ) {
   const callerLine = getCallerLine();
-  const client = new StacksEventStream({
+  const client = new StacksMessageStream({
     appName: 'snp-client-test',
     redisUrl: ENV.REDIS_URL,
     redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,

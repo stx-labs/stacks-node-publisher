@@ -6,7 +6,8 @@ import { createTestHook, isTestEnv } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { SelectedMessagePaths, StacksEventStream } from '../../client/src';
+import { MessagePath } from '../../client/src/messages';
 
 type StacksMessage = {
   timestamp: string;
@@ -14,46 +15,6 @@ type StacksMessage = {
   eventPath: string;
   eventBody: string;
 };
-
-function streamTypeFromString(streamType: string): StacksEventStreamType {
-  switch (streamType) {
-    case 'all':
-      return StacksEventStreamType.all;
-    case 'signer_events':
-      return StacksEventStreamType.signerEvents;
-    case 'chain_events':
-      return StacksEventStreamType.chainEvents;
-    case 'confirmed_chain_events':
-      return StacksEventStreamType.confirmedChainEvents;
-    default:
-      throw new Error(`Invalid stream type: ${streamType}`);
-  }
-}
-
-function isMessageForStream(path: string, streamType: StacksEventStreamType) {
-  if (streamType === StacksEventStreamType.all) {
-    return true;
-  }
-  switch (path) {
-    case '/stackerdb_chunks':
-    case '/proposal_response':
-      return streamType === StacksEventStreamType.signerEvents;
-    case '/new_block':
-    case '/new_burn_block':
-      return (
-        streamType === StacksEventStreamType.chainEvents ||
-        streamType === StacksEventStreamType.confirmedChainEvents
-      );
-    case '/attachments/new':
-    case '/new_mempool_tx':
-    case '/drop_mempool_tx':
-    case '/new_microblocks':
-      return streamType === StacksEventStreamType.chainEvents;
-    default:
-      // Forward all unhandled messages by default.
-      return true;
-  }
-}
 
 export class RedisBroker {
   client: RedisClient;
@@ -340,9 +301,18 @@ export class RedisBroker {
           const lastBlockHeight = msgPayload['last_block_height'] ?? '';
           const lastMessageId = msgPayload['last_message_id'] ?? '';
           const appName = msgPayload['app_name'];
-          const streamType = msgPayload['stream_type'];
+          const selectedPaths: SelectedMessagePaths =
+            msgPayload['selected_paths'] !== '*'
+              ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
+              : '*';
           this.logger.info(
-            `New client connection: ${clientId}, app: ${appName}, lastIndexBlockHash: ${lastIndexBlockHash}, lastBlockHeight: ${lastBlockHeight}, lastMessageId: ${lastMessageId}, streamType: ${streamType}`
+            {
+              lastIndexBlockHash,
+              lastBlockHeight,
+              lastMessageId,
+              selectedPaths,
+            },
+            `RedisBroker new client connection: ${clientId}, app: ${appName}`
           );
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
@@ -364,7 +334,7 @@ export class RedisBroker {
             dedicatedClient,
             clientId,
             { lastIndexBlockHash, lastBlockHeight, lastMessageId },
-            streamType,
+            selectedPaths,
             logger
           )
             .catch(async (error: unknown) => {
@@ -419,7 +389,7 @@ export class RedisBroker {
    * @param client - The redis client to use for the connection
    * @param clientId - The ID of the client
    * @param startingPosition - The starting position containing either lastIndexBlockHash or lastMessageId
-   * @param streamType - The type of stream to backfill
+   * @param selectedPaths - The message paths to fill in this stream
    * @param logger - The logger to use for logging
    */
   async handleClientConnection(
@@ -430,7 +400,7 @@ export class RedisBroker {
       lastBlockHeight: string;
       lastMessageId: string;
     },
-    streamType: string,
+    selectedPaths: SelectedMessagePaths,
     logger: typeof this.logger
   ) {
     await client.connect();
@@ -438,7 +408,6 @@ export class RedisBroker {
     const clientStreamKey = this.getClientStreamKey(clientId);
     const groupKey = this.getClientGlobalStreamGroupKey(clientId);
     const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
-    const streamTypeEnum = streamTypeFromString(streamType);
 
     // Resolve the starting position to a sequence number for backfilling.
     // Priority: lastMessageId > lastIndexBlockHash > start from beginning
@@ -542,18 +511,10 @@ export class RedisBroker {
       //
       // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
       // persisted-storage layer agnostic to whatever storage is used.
-      let messageFilter = this.db.sql``;
-      switch (streamTypeEnum) {
-        case StacksEventStreamType.signerEvents:
-          messageFilter = this.db.sql`AND path IN ('/stackerdb_chunks', '/proposal_response')`;
-          break;
-        case StacksEventStreamType.confirmedChainEvents:
-          messageFilter = this.db.sql`AND path IN ('/new_block', '/new_burn_block')`;
-          break;
-        case StacksEventStreamType.chainEvents:
-          messageFilter = this.db.sql`AND path NOT IN ('/stackerdb_chunks', '/proposal_response')`;
-          break;
-      }
+      const messageFilter =
+        selectedPaths === '*'
+          ? this.db.sql``
+          : this.db.sql`AND path IN ${this.db.sql(selectedPaths)}`;
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
       >`
@@ -672,10 +633,9 @@ export class RedisBroker {
             let multi = client.multi();
             for (const { id, message } of stream.messages) {
               // Filter messages based on message type
-              if (isMessageForStream(message.path, streamTypeEnum)) {
-                multi = multi
-                  // Process message (send to client)
-                  .xAdd(clientStreamKey, id, message);
+              if (selectedPaths === '*' || selectedPaths.includes(message.path as MessagePath)) {
+                // Process message (send to client)
+                multi = multi.xAdd(clientStreamKey, id, message);
               }
             }
             // Acknowledge message for this consumer group

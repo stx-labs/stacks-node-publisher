@@ -16,7 +16,7 @@ import { Message, MessagePath } from './messages';
  *
  * If neither is provided or validation fails, the stream will start from the beginning.
  */
-export type StreamStartingPosition =
+export type StreamPosition =
   | { indexBlockHash: string; blockHeight: number }
   | { messageId: string }
   | null;
@@ -26,7 +26,7 @@ export type StreamStartingPosition =
  * either an index block hash with block height or a message ID. This callback is used to determine
  * the starting message ID for the event stream and may be called periodically on reconnection.
  */
-export type StreamStartingPositionCallback = () => Promise<StreamStartingPosition>;
+export type StreamPositionCallback = () => Promise<StreamPosition>;
 
 /**
  * The callback function for event stream ingestion. Will be called for each message in the event
@@ -42,18 +42,17 @@ export type MessageCallback = (
 ) => Promise<void>;
 
 /**
- * The type of events to ingest depending on the client's Stacks needs.
+ * Message paths to include in a message stream. '*' means client wants to receive all messages.
  */
-export enum StacksEventStreamType {
-  /** All blockchain and mempool events, excluding signer messages. */
-  chainEvents = 'chain_events',
-  /** Only confirmed blockchain events: blocks and burn blocks. */
-  confirmedChainEvents = 'confirmed_chain_events',
-  /** Only signer messages. */
-  signerEvents = 'signer_events',
-  /** All events. */
-  all = 'all',
-}
+export type SelectedMessagePaths = MessagePath[] | '*';
+
+/**
+ * Stacks message stream options.
+ */
+export type StreamOptions = {
+  selectedMessagePaths?: SelectedMessagePaths;
+  batchSize?: number;
+};
 
 /**
  * A client for the Stacks SNP event stream.
@@ -63,7 +62,7 @@ export class StacksEventStream {
   static readonly CONSUMER_NAME = 'primary_consumer';
 
   readonly client: RedisClientType;
-  private readonly eventStreamType: StacksEventStreamType;
+  private readonly selectedPaths: SelectedMessagePaths;
   clientId = randomUUID();
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
@@ -88,12 +87,9 @@ export class StacksEventStream {
     appName: string;
     redisUrl?: string;
     redisStreamPrefix?: string;
-    options?: {
-      eventStreamType?: StacksEventStreamType;
-      msgBatchSize?: number;
-    };
+    options?: StreamOptions;
   }) {
-    this.eventStreamType = args.options?.eventStreamType ?? StacksEventStreamType.all;
+    this.selectedPaths = args.options?.selectedMessagePaths ?? '*';
     this.abort = new AbortController();
     this.streamWaiter = waiter();
     this.redisStreamPrefix = args.redisStreamPrefix ?? '';
@@ -101,7 +97,7 @@ export class StacksEventStream {
       this.redisStreamPrefix += ':';
     }
     this.appName = this.sanitizeRedisClientName(args.appName);
-    this.msgBatchSize = args.options?.msgBatchSize ?? 100;
+    this.msgBatchSize = args.options?.batchSize ?? 100;
 
     this.client = createClient({
       url: args.redisUrl,
@@ -125,7 +121,8 @@ export class StacksEventStream {
     });
   }
 
-  // Sanitize the redis client name to only include valid characters (same approach used in the StackExchange.RedisClient https://github.com/StackExchange/StackExchange.Redis/pull/2654/files)
+  // Sanitize the redis client name to only include valid characters (same approach used in the
+  // StackExchange.RedisClient https://github.com/StackExchange/StackExchange.Redis/pull/2654/files)
   sanitizeRedisClientName(name: string): string {
     const nameSanitizer = /[^!-~]+/g;
     return name.trim().replace(nameSanitizer, '-');
@@ -156,15 +153,12 @@ export class StacksEventStream {
     }
   }
 
-  start(
-    startingPositionCallback: StreamStartingPositionCallback,
-    messageCallback: MessageCallback
-  ) {
+  start(positionCallback: StreamPositionCallback, messageCallback: MessageCallback) {
     this.logger.info('Starting event stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
-          const startingPosition = await startingPositionCallback();
+          const startingPosition = await positionCallback();
           this.logger.info(`Starting position: ${JSON.stringify(startingPosition)}`);
           await this.ingestEventStream(startingPosition, messageCallback);
         } catch (error: unknown) {
@@ -204,7 +198,7 @@ export class StacksEventStream {
   }
 
   private async ingestEventStream(
-    startingPosition: StreamStartingPosition,
+    startingPosition: StreamPosition,
     eventCallback: MessageCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
@@ -227,7 +221,7 @@ export class StacksEventStream {
       last_message_id:
         startingPosition && 'messageId' in startingPosition ? startingPosition.messageId : '',
       app_name: this.appName,
-      stream_type: this.eventStreamType,
+      selected_paths: JSON.stringify(this.selectedPaths),
     };
 
     // Announce connection to the backend

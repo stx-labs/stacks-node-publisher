@@ -2,6 +2,7 @@ import { createClient, RedisClientType } from 'redis';
 import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/api-toolkit';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { Message, MessagePath } from './messages';
 
 /**
  * The starting position for the event stream. Can be either an index block hash with block height
@@ -31,16 +32,13 @@ export type StreamStartingPositionCallback = () => Promise<StreamStartingPositio
  * The callback function for event stream ingestion. Will be called for each message in the event
  * stream. The callback should return a promise that resolves when the message has been processed.
  */
-export type StacksEventCallback = (
+export type MessageCallback = (
   /** The message ID. */
   id: string,
   /** The timestamp of the message. */
   timestamp: string,
-  /** The path of the message. */
-  path: string,
-  /** The payload of the message. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  payload: any
+  /** The message */
+  message: Message
 ) => Promise<void>;
 
 /**
@@ -160,7 +158,7 @@ export class StacksEventStream {
 
   start(
     startingPositionCallback: StreamStartingPositionCallback,
-    eventCallback: StacksEventCallback
+    messageCallback: MessageCallback
   ) {
     this.logger.info('Starting event stream ingestion');
     const runIngest = async () => {
@@ -168,7 +166,7 @@ export class StacksEventStream {
         try {
           const startingPosition = await startingPositionCallback();
           this.logger.info(`Starting position: ${JSON.stringify(startingPosition)}`);
-          await this.ingestEventStream(startingPosition, eventCallback);
+          await this.ingestEventStream(startingPosition, messageCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
             this.logger.info('Event stream ingestion aborted');
@@ -207,7 +205,7 @@ export class StacksEventStream {
 
   private async ingestEventStream(
     startingPosition: StreamStartingPosition,
-    eventCallback: StacksEventCallback
+    eventCallback: MessageCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
     // for any previous connections.
@@ -283,12 +281,10 @@ export class StacksEventStream {
           );
         }
         for (const item of stream.messages) {
-          await eventCallback(
-            item.id,
-            item.message.timestamp,
-            item.message.path,
-            JSON.parse(item.message.body)
-          );
+          await eventCallback(item.id, item.message.timestamp, {
+            path: item.message.path as MessagePath,
+            payload: JSON.parse(item.message.body),
+          });
 
           this.lastProcessedMessageId = item.id;
           this.events.emit('msgReceived', { id: item.id });

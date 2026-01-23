@@ -1,4 +1,4 @@
-export type CoreNodeDropMempoolTxReasonType =
+export type DropMempoolTxReasonType =
   | 'ReplaceByFee'
   | 'ReplaceAcrossFork'
   | 'TooExpensive'
@@ -6,8 +6,8 @@ export type CoreNodeDropMempoolTxReasonType =
   | 'Problematic';
 
 /** Message sent when a transaction is dropped from the mempool. */
-export interface CoreNodeDropMempoolTxMessage {
+export interface DropMempoolTxMessage {
   dropped_txids: string[];
-  reason: CoreNodeDropMempoolTxReasonType;
+  reason: DropMempoolTxReasonType;
   new_txid: string | null;
 }

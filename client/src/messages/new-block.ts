@@ -305,6 +305,14 @@ export interface ClarityAbi {
   non_fungible_tokens: ClarityAbiTypeNonFungibleToken[];
 }
 
+interface NewBlockExecutionCost {
+  read_count: number;
+  read_length: number;
+  runtime: number;
+  write_count: number;
+  write_length: number;
+}
+
 export interface NewBlockTransaction {
   raw_tx: string;
   status: NewBlockTransactionStatus;
@@ -380,12 +388,6 @@ export interface NewBlockMessage {
   block_time: number | null;
   signer_bitvec?: string | null;
   signer_signature?: string[];
-}
-
-interface NewBlockExecutionCost {
-  read_count: number;
-  read_length: number;
-  runtime: number;
-  write_count: number;
-  write_length: number;
+  signer_signature_hash: string;
+  miner_signature: string;
 }

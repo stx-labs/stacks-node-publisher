@@ -69,7 +69,7 @@ export class StacksMessageStream {
   private readonly appName: string;
 
   private readonly abort: AbortController;
-  private readonly streamWaiter: Waiter<void>;
+  private readonly streamWaiter: Waiter;
 
   private readonly logger = defaultLogger.child({ module: 'StacksEventStream' });
   private readonly msgBatchSize: number;

@@ -10,6 +10,9 @@ export * from './new-burn-block';
 export * from './new-mempool-tx';
 export * from './stackerdb-chunks';
 
+/**
+ * The path of the Stacks message as sent by the Stacks node.
+ */
 export enum MessagePath {
   NewBlock = '/new_block',
   NewBurnBlock = '/new_burn_block',

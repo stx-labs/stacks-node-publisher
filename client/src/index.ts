@@ -1,3 +1,4 @@
+// Test commit signing
 import { createClient, RedisClientType } from 'redis';
 import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/api-toolkit';
 import { randomUUID } from 'node:crypto';

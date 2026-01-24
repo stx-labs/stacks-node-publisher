@@ -15,7 +15,7 @@ import {
   testWithFailCb,
   withTimeout,
 } from './utils';
-import { StacksEventStreamType } from '../../client/src';
+import { Message, MessagePath } from '../../client/src/messages';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;
@@ -76,7 +76,7 @@ describe('Stackerdb ingestion tests', () => {
       const lastDbMsg = await db.getLastMessage();
       assert(lastDbMsg);
       const lastDbMsgId = parseInt(lastDbMsg.sequence_number.split('-')[0]);
-      const client = await createTestClient(undefined, StacksEventStreamType.all, error => {
+      const client = await createTestClient(undefined, '*', error => {
         fail(error);
       });
 
@@ -84,7 +84,7 @@ describe('Stackerdb ingestion tests', () => {
 
       let lastReceivedMsgId = 0;
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
         async (id: string) => {
           const msgId = parseInt(id.split('-')[0]);
           expect(msgId).toBe(lastReceivedMsgId + 1);
@@ -110,7 +110,14 @@ describe('Stackerdb ingestion tests', () => {
         assert(lastDbMsg);
         const client = await createTestClient(
           undefined,
-          StacksEventStreamType.chainEvents,
+          [
+            MessagePath.NewBlock,
+            MessagePath.NewBurnBlock,
+            MessagePath.NewMempoolTx,
+            MessagePath.DropMempoolTx,
+            MessagePath.NewMicroblocks,
+            MessagePath.AttachmentsNew,
+          ],
           error => {
             fail(error);
           }
@@ -119,14 +126,17 @@ describe('Stackerdb ingestion tests', () => {
 
         let messagesReceived = 0;
         client.start(
-          async () => ({ messageId: client.lastProcessedMessageId }),
-          async (id: string, _timestamp: string, path: string) => {
+          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+          async (id: string, _timestamp: string, message: Message) => {
             messagesReceived++;
             if (id === '5399-0') {
               allMsgsReceivedWaiter.finish();
             }
-            if (path === '/stackerdb_chunks' || path === '/proposal_response') {
-              fail(new Error(`Unexpected message received: ${path}`));
+            if (
+              message.path === MessagePath.StackerDbChunks ||
+              message.path === MessagePath.ProposalResponse
+            ) {
+              fail(new Error(`Unexpected message received: ${message.path}`));
             }
             return Promise.resolve();
           }
@@ -145,7 +155,7 @@ describe('Stackerdb ingestion tests', () => {
         assert(lastDbMsg);
         const client = await createTestClient(
           undefined,
-          StacksEventStreamType.confirmedChainEvents,
+          [MessagePath.NewBlock, MessagePath.NewBurnBlock],
           error => {
             fail(error);
           }
@@ -154,21 +164,21 @@ describe('Stackerdb ingestion tests', () => {
 
         let messagesReceived = 0;
         client.start(
-          async () => ({ messageId: client.lastProcessedMessageId }),
-          async (id: string, _timestamp: string, path: string) => {
+          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+          async (id: string, _timestamp: string, message: Message) => {
             messagesReceived++;
             if (id === '5396-0') {
               allMsgsReceivedWaiter.finish();
             }
             if (
-              path === '/stackerdb_chunks' ||
-              path === '/proposal_response' ||
-              path === '/new_mempool_tx' ||
-              path === '/drop_mempool_tx' ||
-              path === '/new_microblocks' ||
-              path === '/attachments/new'
+              message.path === MessagePath.StackerDbChunks ||
+              message.path === MessagePath.ProposalResponse ||
+              message.path === MessagePath.NewMempoolTx ||
+              message.path === MessagePath.DropMempoolTx ||
+              message.path === MessagePath.NewMicroblocks ||
+              message.path === MessagePath.AttachmentsNew
             ) {
-              fail(new Error(`Unexpected message received: ${path}`));
+              fail(new Error(`Unexpected message received: ${message.path}`));
             }
             return Promise.resolve();
           }

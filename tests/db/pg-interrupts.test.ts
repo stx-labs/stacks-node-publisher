@@ -14,7 +14,7 @@ import {
 } from './utils';
 import { once } from 'node:events';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;
@@ -144,11 +144,7 @@ describe('Postgres interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       let backfillQueries = 0;
       const onBackfillQueryError = waiter<{ msgId: string }>();
@@ -166,8 +162,8 @@ describe('Postgres interrupts', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -203,7 +199,9 @@ describe('Postgres interrupts', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

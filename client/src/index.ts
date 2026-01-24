@@ -51,7 +51,14 @@ export type SelectedMessagePaths = MessagePath[] | '*';
  * Stacks message stream options.
  */
 export type StreamOptions = {
+  /**
+   * Message paths to include in a message stream, where `*` means client wants to receive all
+   * messages.
+   */
   selectedMessagePaths?: SelectedMessagePaths;
+  /**
+   * The batch size for the message stream.
+   */
   batchSize?: number;
 };
 

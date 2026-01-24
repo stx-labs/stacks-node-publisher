@@ -15,7 +15,7 @@ import {
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Live-stream tests', () => {
   let db: PgStore;
@@ -83,14 +83,10 @@ describe('Live-stream tests', () => {
 
       // As soon as the client starts live-streaming, stall the client for MAX_IDLE_TIME_MS
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (onLivestreamingHit.isFinished) {
             onLivestreamingHit = waiter();
             clientStallStartedWaiter.finish();
@@ -177,7 +173,10 @@ describe('Live-stream tests', () => {
               resolve();
             }
           });
-          if (client.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          if (
+            client.lastProcessedMessageId.split('-')[0] ===
+            latestDbMsg?.sequence_number.split('-')[0]
+          ) {
             resolve();
           }
         })
@@ -223,14 +222,10 @@ describe('Live-stream tests', () => {
 
       const msgEvents = new EventEmitter();
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _message: Message) => {
           msgEvents.emit('msg', id);
           if (onLivestreamHit.isFinished) {
             clientStallStartedWaiter.finish();
@@ -330,11 +325,7 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -367,8 +358,8 @@ describe('Live-stream tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -390,7 +381,9 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -440,11 +433,7 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -485,8 +474,8 @@ describe('Live-stream tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -522,7 +511,9 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -572,11 +563,7 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -615,8 +602,8 @@ describe('Live-stream tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -638,7 +625,9 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -655,7 +644,9 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -697,11 +688,7 @@ describe('Live-stream tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
@@ -725,8 +712,8 @@ describe('Live-stream tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -766,7 +753,9 @@ describe('Live-stream tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

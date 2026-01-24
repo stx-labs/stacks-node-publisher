@@ -8,10 +8,11 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { createClient } from 'redis';
-import { StacksMessageStream, StacksEventStreamType } from '../../client/src';
+import { StacksMessageStream } from '../../client/src';
 import { timeout } from '@hirosystems/api-toolkit';
 import { buildPromServer } from '../../src/prom/prom-server';
 import { FastifyInstance } from 'fastify';
+import { Message } from '../../client/src/messages';
 
 describe('Endpoint tests', () => {
   let db: PgStore;
@@ -172,23 +173,23 @@ describe('Endpoint tests', () => {
       redisUrl: ENV.REDIS_URL,
       redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
       options: {
-        eventStreamType: StacksEventStreamType.all,
+        selectedMessagePaths: '*',
       },
     });
     await client.connect({ waitForReady: true });
     let messagesProcessed = 0;
     let lastTimestamp = 0;
     client.start(
-      async () => (lastMsgId === '0' ? null : { messageId: lastMsgId }),
-      async (id: string, timestamp: string, path: string, body: unknown) => {
+      async () => Promise.resolve(lastMsgId === '0' ? null : { messageId: lastMsgId }),
+      async (id: string, timestamp: string, message: Message) => {
         expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
         lastMsgId = id;
 
-        expect(typeof path).toBe('string');
-        expect(path).not.toBe('');
+        expect(typeof message.path).toBe('string');
+        expect(message.path).not.toBe('');
 
-        expect(typeof body).toBe('object');
-        expect(Object.entries(body as object).length).toBeGreaterThan(0);
+        expect(typeof message.payload).toBe('object');
+        expect(Object.entries(message.payload as object).length).toBeGreaterThan(0);
 
         expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
         lastTimestamp = parseInt(timestamp);

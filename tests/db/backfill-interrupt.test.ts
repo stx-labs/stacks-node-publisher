@@ -15,7 +15,7 @@ import {
 import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Backfill tests', () => {
   let db: PgStore;
@@ -65,14 +65,10 @@ describe('Backfill tests', () => {
       });
 
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (backfillHit.isFinished) {
             backfillHit = waiter();
             clientStallStartedWaiter.finish();
@@ -159,7 +155,10 @@ describe('Backfill tests', () => {
               resolve();
             }
           });
-          if (client.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+          if (
+            client.lastProcessedMessageId.split('-')[0] ===
+            latestDbMsg?.sequence_number.split('-')[0]
+          ) {
             resolve();
           }
         })
@@ -192,14 +191,10 @@ describe('Backfill tests', () => {
 
       const msgEvents = new EventEmitter();
       const clientStallStartedWaiter = waiter();
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _message: Message) => {
           msgEvents.emit('msg', id);
           if (backfillHit.isFinished) {
             clientStallStartedWaiter.finish();
@@ -298,11 +293,7 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -323,8 +314,8 @@ describe('Backfill tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -346,7 +337,9 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -395,11 +388,7 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -422,8 +411,8 @@ describe('Backfill tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -454,7 +443,9 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -503,11 +494,7 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -534,8 +521,8 @@ describe('Backfill tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -557,7 +544,9 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -574,7 +563,9 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -615,11 +606,7 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
@@ -631,8 +618,8 @@ describe('Backfill tests', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -672,7 +659,9 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -716,11 +705,7 @@ describe('Backfill tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const onTransitionToLive = waiter();
       const transitionMsgPayload = { msg: 'msg added during backfill to livestream transition' };
@@ -733,15 +718,15 @@ describe('Backfill tests', () => {
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       const onTransitionMsgReceived = waiter();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
           }
           if (!onTransitionMsgReceived.isFinished) {
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-            if ((body as any).msg === transitionMsgPayload.msg) {
+            if ((message.payload as any).msg === transitionMsgPayload.msg) {
               onTransitionMsgReceived.finish();
             }
           }
@@ -774,7 +759,9 @@ describe('Backfill tests', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

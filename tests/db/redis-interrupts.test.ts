@@ -16,7 +16,7 @@ import {
   withTimeout,
 } from './utils';
 import { once } from 'node:events';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Redis interrupts', () => {
   let db: PgStore;
@@ -90,17 +90,13 @@ describe('Redis interrupts', () => {
   test('client connect succeeds once redis is available', async () => {
     await testWithFailCb(async fail => {
       const lastDbMsg = await db.getLastMessage();
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       const testMsg1 = { test: randomUUID() };
       let lastMsgWaiter = waiter<any>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, body: unknown) => {
-          lastMsgWaiter.finish(body);
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, message: Message) => {
+          lastMsgWaiter.finish(message.payload);
           return Promise.resolve();
         }
       );
@@ -158,11 +154,7 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const addRedisMsgThrow = waiter<{ msgId: string }>();
       const onRedisAddMsg = redisBroker._testHooks!.onAddStacksMsg.register(async msgId => {
@@ -174,8 +166,8 @@ describe('Redis interrupts', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -193,7 +185,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -235,7 +229,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -280,11 +276,7 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       // right after pg data is inserted, wipe redis data before inserting into redis
       const onRedisWiped = waiter<{ msgId: string }>();
@@ -296,8 +288,8 @@ describe('Redis interrupts', () => {
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
-        async () => ({ messageId: client.lastProcessedMessageId }),
-        async (_id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
           if (!firstMsgsReceived.isFinished) {
             // Grab the original client ID before the client reconnects
             firstMsgsReceived.finish({ originalClientId: client.clientId });
@@ -315,7 +307,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -356,7 +350,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

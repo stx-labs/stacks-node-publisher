@@ -12,7 +12,7 @@ import {
   withTimeout,
 } from './utils';
 import { waiter } from '@hirosystems/api-toolkit';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Multiple clients tests', () => {
   let db: PgStore;
@@ -59,24 +59,16 @@ describe('Multiple clients tests', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client1 = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
-      const client2 = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client1 = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
+      const client2 = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       lastDbMsg = await db.getLastMessage();
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
       const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
       client1.start(
-        async () => ({ messageId: client1.lastProcessedMessageId }),
-        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client1.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _message: Message) => {
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
           }
@@ -84,8 +76,8 @@ describe('Multiple clients tests', () => {
         }
       );
       client2.start(
-        async () => ({ messageId: client2.lastProcessedMessageId }),
-        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client2.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _message: Message) => {
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
           }
@@ -112,7 +104,10 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client1.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client1.lastProcessedMessageId.split('-')[0] ===
+          latestDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -123,7 +118,10 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client2.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client2.lastProcessedMessageId.split('-')[0] ===
+          latestDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -155,29 +153,21 @@ describe('Multiple clients tests', () => {
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
 
       // Client 1 will start from and ealier message than client 2
-      const client1 = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client1 = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
       lastDbMsg = await db.getLastMessage();
       // Client 2 will start from the latest message
-      const client2 = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client2 = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
       const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
       client1.start(
-        async () => ({ messageId: client1.lastProcessedMessageId }),
-        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client1.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _message: Message) => {
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             client1BackfillCompleteWaiter.finish({ clientId: client1.clientId });
           }
@@ -185,15 +175,17 @@ describe('Multiple clients tests', () => {
         }
       );
       client2.start(
-        async () => ({ messageId: client2.lastProcessedMessageId }),
-        async (id: string, _timestamp: string, _path: string, _body: unknown) => {
+        async () => Promise.resolve({ messageId: client2.lastProcessedMessageId }),
+        async (id: string, _timestamp: string, _message: Message) => {
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
           }
           await Promise.resolve();
         }
       );
-      if (client2.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+      if (
+        client2.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+      ) {
         client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
       }
 
@@ -216,7 +208,10 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client1.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client1.lastProcessedMessageId.split('-')[0] ===
+          latestDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -227,7 +222,10 @@ describe('Multiple clients tests', () => {
             resolve();
           }
         });
-        if (client2.lastProcessedMessageId.split('-')[0] === latestDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client2.lastProcessedMessageId.split('-')[0] ===
+          latestDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

@@ -1,4 +1,4 @@
-import { StacksMessageStream, StacksEventStreamType } from '../../client/src';
+import { StacksMessageStream, SelectedMessagePaths } from '../../client/src';
 import { ENV } from '../../src/env';
 import { EventObserverServer } from '../../src/event-observer/event-server';
 import { RedisClient } from '../../src/redis/redis-types';
@@ -30,7 +30,7 @@ export async function closeTestClients() {
 
 export async function createTestClient(
   lastMsgId = '0',
-  streamType: StacksEventStreamType = StacksEventStreamType.all,
+  selectedMessagePaths: SelectedMessagePaths = '*',
   onSequentialMsgError: (error: Error) => void
 ) {
   const callerLine = getCallerLine();
@@ -39,7 +39,7 @@ export async function createTestClient(
     redisUrl: ENV.REDIS_URL,
     redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
     options: {
-      eventStreamType: streamType,
+      selectedMessagePaths,
     },
   });
   await client.connect({ waitForReady: true });
@@ -53,7 +53,7 @@ export async function createTestClient(
   client.events.on('msgReceived', ({ id }) => {
     const msgId = parseInt(id.split('-')[0]);
     // Validate that the msg ids are sequential for 'all' stream type.
-    if (streamType === StacksEventStreamType.all && msgId !== lastReceivedMsgId + 1) {
+    if (selectedMessagePaths === '*' && msgId !== lastReceivedMsgId + 1) {
       onSequentialMsgError(
         new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
       );

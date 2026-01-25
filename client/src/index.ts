@@ -81,8 +81,8 @@ export class StacksMessageStream {
   private readonly logger = defaultLogger.child({ module: 'StacksMessageStream' });
   private readonly msgBatchSize: number;
 
-  /** The last message ID that was processed by this client. */
-  lastProcessedMessageId: string = '0-0';
+  /** For testing purposes only. The last message ID that was processed by this client. */
+  public lastProcessedMessageId: string = '0-0';
 
   connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
 

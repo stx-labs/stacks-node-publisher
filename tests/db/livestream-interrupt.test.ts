@@ -341,6 +341,7 @@ describe('Live-stream tests', () => {
       const onLivestream = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
         async _msgId => {
           try {
+            // Deliberately kill the client's redis connection to simulate a connection error
             const clientRedisConnectionID = await client.client.clientId();
             const clientKillCount = await redisBroker.client.clientKill({
               filter: ClientKillFilters.ID,

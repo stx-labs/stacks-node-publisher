@@ -232,69 +232,69 @@ export class StacksMessageStream {
       selected_paths: JSON.stringify(this.selectedPaths),
     };
 
-    // Announce connection to the backend
-    await this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg);
-
-    let readGroupFailures = 0;
+    // Announce connection to the backend and wait until the server acknowledges by consuming the
+    // handshake message
+    const connectionStreamKey = this.redisStreamPrefix + 'connection_stream';
+    const handshakeMsgId = await this.client.xAdd(connectionStreamKey, '*', handshakeMsg);
+    this.logger.info(
+      `Sent handshake message ${handshakeMsgId}, waiting for server to acknowledge...`
+    );
     while (!this.abort.signal.aborted) {
-      try {
-        // The backend creates the group with the correct starting position, so we use '>' here to
-        // get only messages after the last message ID.
-        const results = await this.client.xReadGroup(
-          StacksMessageStream.GROUP_NAME,
-          StacksMessageStream.CONSUMER_NAME,
-          {
-            key: streamKey,
-            id: '>',
-          },
-          {
-            COUNT: this.msgBatchSize,
-            BLOCK: 1000, // Wait 1 second for new events.
-          }
-        );
-        if (!results || results.length === 0) {
-          continue;
-        }
-        for (const stream of results) {
-          if (stream.messages.length > 0) {
-            this.logger.debug(
-              `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
-            );
-          }
-          for (const item of stream.messages) {
-            await eventCallback(item.id, item.message.timestamp, {
-              path: item.message.path as MessagePath,
-              payload: JSON.parse(item.message.body),
-            });
+      const msgExists = await this.client.xRange(
+        connectionStreamKey,
+        handshakeMsgId,
+        handshakeMsgId
+      );
+      if (msgExists.length === 0) {
+        // Message was consumed by the server
+        this.logger.info('Server acknowledged connection handshake');
+        break;
+      }
+      await timeout(100);
+    }
 
-            this.lastProcessedMessageId = item.id;
-            this.events.emit('msgReceived', { id: item.id });
+    // Start reading messages from the stream.
+    while (!this.abort.signal.aborted) {
+      // The backend creates the group with the correct starting position, so we use '>' here to
+      // get only messages after the last message ID.
+      const results = await this.client.xReadGroup(
+        StacksMessageStream.GROUP_NAME,
+        StacksMessageStream.CONSUMER_NAME,
+        {
+          key: streamKey,
+          id: '>',
+        },
+        {
+          COUNT: this.msgBatchSize,
+          BLOCK: 1000, // Wait 1 second for new events.
+        }
+      );
+      if (!results || results.length === 0) {
+        continue;
+      }
+      for (const stream of results) {
+        if (stream.messages.length > 0) {
+          this.logger.debug(
+            `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
+          );
+        }
+        for (const item of stream.messages) {
+          await eventCallback(item.id, item.message.timestamp, {
+            path: item.message.path as MessagePath,
+            payload: JSON.parse(item.message.body),
+          });
 
-            await this.client
-              .multi()
-              // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
-              .xAck(streamKey, StacksMessageStream.GROUP_NAME, item.id)
-              // Delete the message from the stream so that it doesn't get reprocessed
-              .xDel(streamKey, item.id)
-              .exec();
-          }
+          this.lastProcessedMessageId = item.id;
+          this.events.emit('msgReceived', { id: item.id });
+
+          await this.client
+            .multi()
+            // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
+            .xAck(streamKey, StacksMessageStream.GROUP_NAME, item.id)
+            // Delete the message from the stream so that it doesn't get reprocessed
+            .xDel(streamKey, item.id)
+            .exec();
         }
-      } catch (err) {
-        const errMsg = (err as Error).message ?? '';
-        if (errMsg.includes('NOGROUP') || errMsg.includes('MKSTREAM')) {
-          // Stream or group not created yet, wait and retry
-          readGroupFailures++;
-          if (readGroupFailures >= 10) {
-            this.logger.error(
-              err as Error,
-              `Failed to read group after ${readGroupFailures} retries, giving up`
-            );
-            throw err;
-          }
-          await timeout(100);
-          continue;
-        }
-        throw err;
       }
     }
   }

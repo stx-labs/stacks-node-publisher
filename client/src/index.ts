@@ -70,8 +70,9 @@ export class StacksMessageStream {
   static readonly CONSUMER_NAME = 'primary_consumer';
 
   readonly client: RedisClientType;
+  public clientId = randomUUID();
+
   private readonly selectedPaths: SelectedMessagePaths;
-  clientId: string = 'unknown';
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
 
@@ -83,8 +84,8 @@ export class StacksMessageStream {
 
   /** For testing purposes only. The last message ID that was processed by this client. */
   public lastProcessedMessageId: string = '0-0';
-
-  connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
+  /** For testing purposes only. The connection status of the client. */
+  public connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
 
   readonly events = new EventEmitter<{
     redisConsumerGroupDestroyed: [];

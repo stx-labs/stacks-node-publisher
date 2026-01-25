@@ -154,17 +154,21 @@ describe('Multiple clients tests', () => {
 
       // Client 1 will start from and ealier message than client 2
       const client1 = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
-
-      for (let i = 0; i < msgFillCount; i++) {
+      for (let i = 0; i < ENV.DB_MSG_BATCH_SIZE; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
-      lastDbMsg = await db.getLastMessage();
+
       // Client 2 will start from the latest message
+      lastDbMsg = await db.getLastMessage();
       const client2 = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
+      for (let i = ENV.DB_MSG_BATCH_SIZE; i < msgFillCount; i++) {
+        await sendTestEvent(eventServer, { backfillMsgNumber: i });
+      }
 
       const client1BackfillCompleteWaiter = waiter<{ clientId: string }>();
       const client2BackfillCompleteWaiter = waiter<{ clientId: string }>();
 
+      lastDbMsg = await db.getLastMessage();
       client1.start(
         async () => Promise.resolve({ messageId: client1.lastProcessedMessageId }),
         async (id: string, _timestamp: string, _message: Message) => {
@@ -183,11 +187,6 @@ describe('Multiple clients tests', () => {
           await Promise.resolve();
         }
       );
-      if (
-        client2.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
-      ) {
-        client2BackfillCompleteWaiter.finish({ clientId: client2.clientId });
-      }
 
       // Wait for both clients to finish backfilling
       const [client1OrigId, client2OrigId] = await Promise.all([

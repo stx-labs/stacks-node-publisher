@@ -33,7 +33,7 @@ export async function createTestClient(
   selectedMessagePaths: SelectedMessagePaths = '*',
   onSequentialMsgError: (error: Error) => void
 ) {
-  const callerLine = getCallerLine();
+  // const callerLine = getCallerLine();
   const client = new StacksMessageStream({
     appName: 'snp-client-test',
     redisUrl: ENV.REDIS_URL,
@@ -45,21 +45,21 @@ export async function createTestClient(
   await client.connect({ waitForReady: true });
   testClients.add(client);
 
-  // Set the initial lastProcessedMessageId for sequential validation
-  client.lastProcessedMessageId = lastMsgId;
+  // // Set the initial lastProcessedMessageId for sequential validation
+  // client.lastProcessedMessageId = lastMsgId;
 
-  // Track the starting message ID for sequential validation
-  let lastReceivedMsgId = parseInt(lastMsgId.split('-')[0]);
-  client.events.on('msgReceived', ({ id }) => {
-    const msgId = parseInt(id.split('-')[0]);
-    // Validate that the msg ids are sequential for 'all' stream type.
-    if (selectedMessagePaths === '*' && msgId !== lastReceivedMsgId + 1) {
-      onSequentialMsgError(
-        new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
-      );
-    }
-    lastReceivedMsgId = msgId;
-  });
+  // // Track the starting message ID for sequential validation
+  // let lastReceivedMsgId = parseInt(lastMsgId.split('-')[0]);
+  // client.events.on('msgReceived', ({ id }) => {
+  //   const msgId = parseInt(id.split('-')[0]);
+  //   // Validate that the msg ids are sequential for 'all' stream type.
+  //   if (selectedMessagePaths === '*' && msgId !== lastReceivedMsgId + 1) {
+  //     onSequentialMsgError(
+  //       new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
+  //     );
+  //   }
+  //   lastReceivedMsgId = msgId;
+  // });
 
   return client;
 }

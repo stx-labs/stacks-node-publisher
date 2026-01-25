@@ -71,14 +71,14 @@ export class StacksMessageStream {
 
   readonly client: RedisClientType;
   private readonly selectedPaths: SelectedMessagePaths;
-  clientId = randomUUID();
+  clientId: string = 'unknown';
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
 
   private readonly abort: AbortController;
   private readonly streamWaiter: Waiter;
 
-  private readonly logger = defaultLogger.child({ module: 'StacksEventStream' });
+  private readonly logger = defaultLogger.child({ module: 'StacksMessageStream' });
   private readonly msgBatchSize: number;
 
   /** The last message ID that was processed by this client. */
@@ -114,18 +114,20 @@ export class StacksMessageStream {
     });
 
     // Must have a listener for 'error' events to avoid unhandled exceptions
-    this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
+    this.client.on('error', (err: Error) =>
+      this.logger.error(err, `Redis error for client ${this.clientId}`)
+    );
     this.client.on('reconnecting', () => {
       this.connectionStatus = 'reconnecting';
-      this.logger.info('Reconnecting to Redis');
+      this.logger.info(`Reconnecting to Redis for client ${this.clientId}`);
     });
     this.client.on('ready', () => {
       this.connectionStatus = 'connected';
-      this.logger.info('Redis connection ready');
+      this.logger.info(`Redis connection ready for client ${this.clientId}`);
     });
     this.client.on('end', () => {
       this.connectionStatus = 'ended';
-      this.logger.info('Redis connection ended');
+      this.logger.info(`Redis connection ended for client ${this.clientId}`);
     });
   }
 
@@ -146,23 +148,29 @@ export class StacksMessageStream {
       while (true) {
         try {
           await this.client.connect();
-          this.logger.info('Connected to Redis');
+          this.logger.info(`Connected to Redis for client ${this.clientId}`);
           break;
         } catch (err) {
-          this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+          this.logger.error(
+            err as Error,
+            `Error connecting to Redis for client ${this.clientId}, retrying...`
+          );
           await timeout(500);
         }
       }
     } else {
       void this.client.connect().catch((err: unknown) => {
-        this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
+        this.logger.error(
+          err as Error,
+          `Error connecting to Redis for client ${this.clientId}, retrying...`
+        );
         void timeout(500).then(() => this.connect({ waitForReady }));
       });
     }
   }
 
   start(positionCallback: StreamPositionCallback, messageCallback: MessageCallback) {
-    this.logger.info('Starting stream ingestion');
+    this.logger.info(`Starting stream ingestion for client ${this.clientId}`);
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
@@ -180,7 +188,7 @@ export class StacksMessageStream {
             // the connection.
             this.logger.error(
               error as Error,
-              `The Redis stream group for this client was destroyed by the server`
+              `The Redis stream group for this client was destroyed by the server for client ${this.clientId}`
             );
             this.events.emit('redisConsumerGroupDestroyed');
             // re-announce connection, re-create group, etc
@@ -188,7 +196,10 @@ export class StacksMessageStream {
           } else {
             // TODO: what are other expected errors and how should we handle them? For now we just retry
             // forever.
-            this.logger.error(error as Error, 'Error reading or acknowledging from stream');
+            this.logger.error(
+              error as Error,
+              `Error reading or acknowledging from stream for client ${this.clientId}`
+            );
             this.logger.info('Reconnecting to Redis stream in 1 second...');
             await timeout(1000);
             continue;
@@ -232,26 +243,15 @@ export class StacksMessageStream {
       selected_paths: JSON.stringify(this.selectedPaths),
     };
 
-    // Announce connection to the backend and wait until the server acknowledges by consuming the
-    // handshake message
-    const connectionStreamKey = this.redisStreamPrefix + 'connection_stream';
-    const handshakeMsgId = await this.client.xAdd(connectionStreamKey, '*', handshakeMsg);
-    this.logger.info(
-      `Sent handshake message ${handshakeMsgId}, waiting for server to acknowledge...`
-    );
-    while (!this.abort.signal.aborted) {
-      const msgExists = await this.client.xRange(
-        connectionStreamKey,
-        handshakeMsgId,
-        handshakeMsgId
-      );
-      if (msgExists.length === 0) {
-        // Message was consumed by the server
-        this.logger.info('Server acknowledged connection handshake');
-        break;
-      }
-      await timeout(100);
-    }
+    await this.client
+      .multi()
+      // Announce connection
+      .xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg)
+      // Create group for this stream
+      .xGroupCreate(streamKey, StacksMessageStream.GROUP_NAME, '$', {
+        MKSTREAM: true,
+      })
+      .exec();
 
     // Start reading messages from the stream.
     while (!this.abort.signal.aborted) {
@@ -275,7 +275,7 @@ export class StacksMessageStream {
       for (const stream of results) {
         if (stream.messages.length > 0) {
           this.logger.debug(
-            `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
+            `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id} with client ${this.clientId}`
           );
         }
         for (const item of stream.messages) {

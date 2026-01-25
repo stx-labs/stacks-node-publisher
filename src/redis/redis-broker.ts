@@ -6,7 +6,7 @@ import { createTestHook, isTestEnv } from '../helpers';
 import type { RedisClient, XInfoGroupsResponse } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
-import { SelectedMessagePaths, StacksMessageStream } from '../../client/src';
+import { SelectedMessagePaths } from '../../client/src';
 import { MessagePath } from '../../client/src/messages';
 
 type StacksMessage = {
@@ -293,6 +293,9 @@ export class RedisBroker {
           const msgId = msg.id;
           const msgPayload = msg.message;
 
+          // Delete the connection request messsage after receiving
+          await listeningClient.xDel(connectionStreamKey, msgId);
+
           const clientId = msgPayload['client_id'];
           const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
           const lastBlockHeight = msgPayload['last_block_height'] ?? '';
@@ -309,9 +312,6 @@ export class RedisBroker {
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
           const logger = this.logger.child({ clientId, appName });
-          const clientStreamKey = this.getClientStreamKey(clientId);
-          const groupKey = this.getClientGlobalStreamGroupKey(clientId);
-          const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
           const dedicatedClient = this.client.duplicate({
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
             disableOfflineQueue: true,
@@ -326,26 +326,18 @@ export class RedisBroker {
             }
           });
 
-          // Prime the client connection by creating the consumer group and determining the starting
-          // message ID.
-          const startMessageId = await this.primeClientConnection(
-            dedicatedClient,
-            clientStreamKey,
-            groupKey,
-            consumerKey,
+          // Determine the starting message sequence number for this client by resolving its
+          // starting position.
+          const startSequenceNumber = await this.resolveStartMessageSequenceNumber(
             { lastIndexBlockHash, lastBlockHeight, lastMessageId },
             logger
           );
-          // Delete the connection request messsage so the client knows it should now wait for
-          // messages.
-          await listeningClient.xDel(connectionStreamKey, msgId);
-
+          // Handle the client connection by creating the consumer group and backfilling messages
+          // from postgres.
           void this.handleClientConnection(
             dedicatedClient,
-            clientStreamKey,
-            groupKey,
-            consumerKey,
-            startMessageId,
+            clientId,
+            startSequenceNumber,
             selectedPaths,
             logger
           )
@@ -400,20 +392,48 @@ export class RedisBroker {
    * client's stream.
    * @param client - The redis client to use for the connection
    * @param clientId - The ID of the client
-   * @param startingPosition - The starting position containing either lastIndexBlockHash or lastMessageId
+   * @param startSequenceNumber - The resolved starting message sequence number
    * @param selectedPaths - The message paths to fill in this stream
    * @param logger - The logger to use for logging
    */
   async handleClientConnection(
     client: typeof this.client,
-    clientStreamKey: string,
-    groupKey: string,
-    consumerKey: string,
-    startMessageId: string,
+    clientId: string,
+    startSequenceNumber: string,
     selectedPaths: SelectedMessagePaths,
     logger: typeof this.logger
   ) {
-    let lastQueriedSequenceNumber = startMessageId;
+    await client.connect();
+
+    const clientStreamKey = this.getClientStreamKey(clientId);
+    const groupKey = this.getClientGlobalStreamGroupKey(clientId);
+    const consumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
+
+    let lastQueriedSequenceNumber = startSequenceNumber;
+
+    // We need to create a unique redis stream for this client, then backfill it with messages
+    // starting from the resolved sequence number. Backfilling is performed by reading messages from
+    // postgres, then writing them to the client's redis stream.
+    //
+    // Once we've backfilled the stream, we can start streaming messages live from the global redis
+    // stream to the client redis stream.
+    //
+    // This is a bit tricky because we need to do this atomically so that no messages are missed
+    // during the switch from backfilling to live-streaming.
+
+    // First, we create a consumer group for the global stream for this client. This ensures that
+    // the global stream will not discard new messages that this client might after we've finished
+    // backfilling from postgres. The special key `$` instructs redis to hold onto all new messages,
+    // which could be added to the stream right after the postgres backfilling is complete, but
+    // before we transition to live streaming.
+    const msgId = '$';
+    await client
+      .multi()
+      .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
+      .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)
+      .incr(this.globalStreamGroupVersionKey)
+      .exec();
+    logger.info(`Consumer group created on global stream for client`);
 
     // Next, we need to backfill the redis stream with messages from postgres. NOTE: do not perform
     // the backfilling within a sql transaction because it will use up a connection from the pool
@@ -424,12 +444,13 @@ export class RedisBroker {
           await cb(lastQueriedSequenceNumber);
         }
       }
-      // TODO: Should we catch ephemeral connection errors here and retry? otherwise an error here will
-      // abort this consumer and the client will re-init and backfill again. Could use `isPgConnectionError(err)`
-      // to check for retryable errors N amount of times before throwing and giving up completely here.
+      // TODO: Should we catch ephemeral connection errors here and retry? otherwise an error here
+      // will abort this consumer and the client will re-init and backfill again. Could use
+      // `isPgConnectionError(err)` to check for retryable errors N amount of times before throwing
+      // and giving up completely here.
       //
-      // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
-      // persisted-storage layer agnostic to whatever storage is used.
+      // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface
+      // with the persisted-storage layer agnostic to whatever storage is used.
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
       >`
@@ -470,7 +491,7 @@ export class RedisBroker {
         break;
       }
 
-      // xAdd all msgs at once. These were already filtered by message type depending on the stream type.
+      // xAdd all msgs at once.
       let multi = client.multi();
       for (const row of dbResults) {
         const messageId = `${row.sequence_number}-0`;
@@ -551,9 +572,8 @@ export class RedisBroker {
             );
             let multi = client.multi();
             for (const { id, message } of stream.messages) {
-              // Filter messages based on message type
+              // Filter messages based on message path
               if (selectedPaths === '*' || selectedPaths.includes(message.path as MessagePath)) {
-                // Process message (send to client)
                 multi = multi.xAdd(clientStreamKey, id, message);
               }
             }
@@ -564,8 +584,8 @@ export class RedisBroker {
           }
         }
 
-        // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream length
-        // is below a certain threshold before continuing.
+        // Backpressure handling to avoid overwhelming redis memory. Wait until the client stream
+        // length is below a certain threshold before continuing.
         const timer = stopwatch();
         while (!this.abortController.signal.aborted) {
           const clientStreamLen = await client.xLen(clientStreamKey);
@@ -592,11 +612,15 @@ export class RedisBroker {
     }
   }
 
-  private async primeClientConnection(
-    client: typeof this.client,
-    clientStreamKey: string,
-    groupKey: string,
-    consumerKey: string,
+  /**
+   * Gets the starting message ID for a client by resolving the starting position to a sequence
+   * number.
+   * @param startingPosition - The starting position containing either lastIndexBlockHash or
+   * lastMessageId
+   * @param logger - The logger to use for logging
+   * @returns The starting message ID
+   */
+  private async resolveStartMessageSequenceNumber(
     startingPosition: {
       lastIndexBlockHash: string;
       lastBlockHeight: string;
@@ -604,12 +628,10 @@ export class RedisBroker {
     },
     logger: typeof this.logger
   ): Promise<string> {
-    await client.connect();
+    let sequenceNumber: string = '0';
 
     // Resolve the starting position to a sequence number for backfilling.
     // Priority: lastMessageId > lastIndexBlockHash > start from beginning
-    let sequenceNumber: string = '0';
-
     if (startingPosition.lastMessageId) {
       // Validate the message ID exists and is not greater than the highest available
       const validationResult = await this.db.validateAndResolveMessageId(
@@ -658,114 +680,14 @@ export class RedisBroker {
       logger.info('No starting position provided, starting from beginning');
     }
 
-    // We need to create a unique redis stream for this client, then backfill it with messages
-    // starting from the resolved sequence number. Backfilling is performed by reading messages from
-    // postgres, then writing them to the client's redis stream.
-    //
-    // Once we've backfilled the stream, we can start streaming messages live from the global redis
-    // stream to the client redis stream.
-    //
-    // This is a bit tricky because we need to do this atomically so that no messages are missed
-    // during the switch from backfilling to live-streaming.
-
-    // First, we create a consumer group for the global stream for this client. This ensures that
-    // the global stream will not discard new messages that this client might after we've finished
-    // backfilling from postgres. The special key `$` instructs redis to hold onto all new messages,
-    // which could be added to the stream right after the postgres backfilling is complete, but
-    // before we transition to live streaming.
-    const msgId = '$';
-
-    await client
-      .multi()
-      // Create the consumer group on the CLIENT stream for the client to read from.
-      // The client is waiting for this group to be created before it starts reading.
-      .xGroupCreate(clientStreamKey, StacksMessageStream.GROUP_NAME, `${sequenceNumber}-0`, {
-        MKSTREAM: true,
-      })
-      .xGroupCreate(this.globalStreamKey, groupKey, msgId, { MKSTREAM: true })
-      .xGroupCreateConsumer(this.globalStreamKey, groupKey, consumerKey)
-      .incr(this.globalStreamGroupVersionKey)
-      .exec();
-    logger.info(
-      `Consumer group created on client stream for client (at sequence ${sequenceNumber})`
-    );
-    logger.info(`Consumer group created on global stream for client`);
-
     return sequenceNumber;
   }
 
   /**
-   * Determines the starting position for a client by resolving the lastIndexBlockHash to a sequence
-   * number or validating the lastMessageId exists and is not greater than the highest available.
-   * @param startingPosition - The starting position containing either lastIndexBlockHash or
-   * lastMessageId
-   * @param logger - The logger to use for logging
-   * @returns The sequence number to start backfilling from
+   * Cleanup old messages that are no longer needed by any consumers. This works by determining the
+   * oldest message in the global stream that has been acknowledged by all consumer groups and trims
+   * the stream to that message.
    */
-  private async getClientStartMessageSequenceNumber(
-    startingPosition: {
-      lastIndexBlockHash: string;
-      lastBlockHeight: string;
-      lastMessageId: string;
-    },
-    logger: typeof this.logger
-  ): Promise<string> {
-    let lastQueriedSequenceNumber: string = '0';
-
-    if (startingPosition.lastMessageId) {
-      // Validate the message ID exists and is not greater than the highest available
-      const validationResult = await this.db.validateAndResolveMessageId(
-        startingPosition.lastMessageId
-      );
-      if (validationResult) {
-        lastQueriedSequenceNumber = validationResult.sequenceNumber;
-        if (validationResult.clampedToMax) {
-          logger.info(
-            `Message ID ${startingPosition.lastMessageId} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
-          );
-        } else {
-          logger.info(`Using validated message ID: ${lastQueriedSequenceNumber}-0`);
-        }
-      } else {
-        logger.warn(
-          `Message ID ${startingPosition.lastMessageId} is invalid or database is empty, starting from beginning`
-        );
-      }
-    } else if (startingPosition.lastIndexBlockHash) {
-      // Resolve the index block hash to a sequence number
-      const lastBlockHeight = startingPosition.lastBlockHeight
-        ? parseInt(startingPosition.lastBlockHeight)
-        : undefined;
-      const resolutionResult = await this.db.resolveIndexBlockHashToSequenceNumber(
-        startingPosition.lastIndexBlockHash,
-        lastBlockHeight
-      );
-      if (resolutionResult) {
-        lastQueriedSequenceNumber = resolutionResult.sequenceNumber;
-        if (resolutionResult.clampedToMax) {
-          logger.info(
-            `Block hash ${startingPosition.lastIndexBlockHash} not found but height ${lastBlockHeight} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
-          );
-        } else {
-          logger.info(
-            `Resolved block hash ${startingPosition.lastIndexBlockHash} to sequence number ${lastQueriedSequenceNumber}-0`
-          );
-        }
-      } else {
-        logger.warn(
-          `Unable to resolve index block hash ${startingPosition.lastIndexBlockHash} to message sequence number, starting from beginning`
-        );
-      }
-    } else {
-      logger.info('No starting position provided, starting from beginning');
-    }
-
-    return lastQueriedSequenceNumber;
-  }
-
-  // Cleanup old message that are no longer needed by any consumers. This works by determining the oldest
-  // message in the global stream that has been acknowledged by all consumer groups and trims the stream
-  // to that message.
   async trimGlobalStream() {
     try {
       // Use an optimistic redis transaction to trim the global stream in order to prevent a race-condition
@@ -838,9 +760,11 @@ export class RedisBroker {
     }
   }
 
+  /**
+   * Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
+   * up with the global stream, otherwise the global stream will continue to grow and OOM redis.
+   */
   async pruneIdleClients() {
-    // Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
-    // up with the global stream, otherwise the global stream will continue to grow and OOM redis.
     const fullStreamInfo = await xInfoStreamFull(this.client, this.globalStreamKey);
     const lastEntryID = fullStreamInfo.lastGeneratedId
       ? parseInt(fullStreamInfo.lastGeneratedId.split('-')[0])

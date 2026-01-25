@@ -293,9 +293,6 @@ export class RedisBroker {
           const msgId = msg.id;
           const msgPayload = msg.message;
 
-          // Delete the connection request messsage after receiving
-          await listeningClient.xDel(connectionStreamKey, msgId);
-
           const clientId = msgPayload['client_id'];
           const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
           const lastBlockHeight = msgPayload['last_block_height'] ?? '';
@@ -305,10 +302,7 @@ export class RedisBroker {
             msgPayload['selected_paths'] !== '*'
               ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
               : '*';
-          this.logger.info(
-            msgPayload,
-            `RedisBroker new client connection: ${clientId}, app: ${appName}`
-          );
+          this.logger.info(msgPayload, `New client connection: ${clientId}, app: ${appName}`);
 
           // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
           const logger = this.logger.child({ clientId, appName });
@@ -332,9 +326,12 @@ export class RedisBroker {
             { lastIndexBlockHash, lastBlockHeight, lastMessageId },
             logger
           );
-          // Handle the client connection by creating the consumer group and backfilling messages
-          // from postgres.
-          void this.handleClientConnection(
+          // Once we have the starting position, delete the connection request message. This ensures
+          // any errors won't make us lose this connection request.
+          await listeningClient.xDel(connectionStreamKey, msgId);
+
+          // Serve the client by creating the consumer group and backfilling messages from postgres.
+          void this.streamMessages(
             dedicatedClient,
             clientId,
             startSequenceNumber,
@@ -396,7 +393,7 @@ export class RedisBroker {
    * @param selectedPaths - The message paths to fill in this stream
    * @param logger - The logger to use for logging
    */
-  async handleClientConnection(
+  async streamMessages(
     client: typeof this.client,
     clientId: string,
     startSequenceNumber: string,

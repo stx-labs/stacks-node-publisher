@@ -82,7 +82,7 @@ export class StacksMessageStream {
   private readonly msgBatchSize: number;
 
   /** The last message ID that was processed by this client. */
-  lastProcessedMessageId: string = '0';
+  lastProcessedMessageId: string = '0-0';
 
   connectionStatus: 'not_started' | 'connected' | 'reconnecting' | 'ended' = 'not_started';
 
@@ -117,15 +117,15 @@ export class StacksMessageStream {
     this.client.on('error', (err: Error) => this.logger.error(err, 'Redis error'));
     this.client.on('reconnecting', () => {
       this.connectionStatus = 'reconnecting';
-      this.logger.info('StacksMessageStream reconnecting to Redis');
+      this.logger.info('Reconnecting to Redis');
     });
     this.client.on('ready', () => {
       this.connectionStatus = 'connected';
-      this.logger.info('StacksMessageStream Redis connection ready');
+      this.logger.info('Redis connection ready');
     });
     this.client.on('end', () => {
       this.connectionStatus = 'ended';
-      this.logger.info('StacksMessageStream Redis connection ended');
+      this.logger.info('Redis connection ended');
     });
   }
 
@@ -146,13 +146,10 @@ export class StacksMessageStream {
       while (true) {
         try {
           await this.client.connect();
-          this.logger.info('StacksMessageStream connected to Redis');
+          this.logger.info('Connected to Redis');
           break;
         } catch (err) {
-          this.logger.error(
-            err as Error,
-            'StacksMessageStream error connecting to Redis, retrying...'
-          );
+          this.logger.error(err as Error, 'Error connecting to Redis, retrying...');
           await timeout(500);
         }
       }
@@ -165,18 +162,16 @@ export class StacksMessageStream {
   }
 
   start(positionCallback: StreamPositionCallback, messageCallback: MessageCallback) {
-    this.logger.info('StacksMessageStream starting stream ingestion');
+    this.logger.info('Starting stream ingestion');
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
           const startingPosition = await positionCallback();
-          this.logger.info(
-            `StacksMessageStream starting position: ${JSON.stringify(startingPosition)}`
-          );
+          this.logger.info(`Starting position: ${JSON.stringify(startingPosition)}`);
           await this.ingestEventStream(startingPosition, messageCallback);
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
-            this.logger.info('StacksMessageStream stream ingestion aborted');
+            this.logger.info('Stream ingestion aborted');
             break;
           } else if ((error as Error).message?.includes('NOGROUP')) {
             // The redis stream doesn't exist. This can happen if the redis server was restarted,
@@ -185,7 +180,7 @@ export class StacksMessageStream {
             // the connection.
             this.logger.error(
               error as Error,
-              `StacksMessageStream the Redis stream group for this client was destroyed by the server`
+              `The Redis stream group for this client was destroyed by the server`
             );
             this.events.emit('redisConsumerGroupDestroyed');
             // re-announce connection, re-create group, etc
@@ -193,11 +188,8 @@ export class StacksMessageStream {
           } else {
             // TODO: what are other expected errors and how should we handle them? For now we just retry
             // forever.
-            this.logger.error(
-              error as Error,
-              'StacksMessageStream error reading or acknowledging from stream'
-            );
-            this.logger.info('StacksMessageStream reconnecting to Redis stream in 1 second...');
+            this.logger.error(error as Error, 'Error reading or acknowledging from stream');
+            this.logger.info('Reconnecting to Redis stream in 1 second...');
             await timeout(1000);
             continue;
           }
@@ -209,7 +201,7 @@ export class StacksMessageStream {
         this.streamWaiter.finish();
       })
       .catch((err: unknown) => {
-        this.logger.error(err as Error, 'StacksMessageStream ingestion stream error');
+        this.logger.error(err as Error, 'Ingestion stream error');
       });
   }
 
@@ -220,9 +212,7 @@ export class StacksMessageStream {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
     // for any previous connections.
     this.clientId = randomUUID();
-    this.logger.info(
-      `StacksMessageStream connecting to Redis stream with clientId: ${this.clientId}`
-    );
+    this.logger.info(`Connecting to Redis stream with clientId: ${this.clientId}`);
     const streamKey = `${this.redisStreamPrefix}client:${this.clientId}`;
     await this.client.clientSetName(this.redisClientName);
 
@@ -245,70 +235,66 @@ export class StacksMessageStream {
     // Announce connection to the backend
     await this.client.xAdd(this.redisStreamPrefix + 'connection_stream', '*', handshakeMsg);
 
-    // Wait for the backend to create the consumer group on our stream.
-    // The backend will resolve the index_block_hash to a sequence number and create the group.
-    this.logger.info('StacksMessageStream waiting for backend to create consumer group...');
+    let readGroupFailures = 0;
     while (!this.abort.signal.aborted) {
       try {
-        // Try to create a consumer in the group - this will succeed if the group exists
-        await this.client.xGroupCreateConsumer(
-          streamKey,
+        // The backend creates the group with the correct starting position, so we use '>' here to
+        // get only messages after the last message ID.
+        const results = await this.client.xReadGroup(
           StacksMessageStream.GROUP_NAME,
-          StacksMessageStream.CONSUMER_NAME
+          StacksMessageStream.CONSUMER_NAME,
+          {
+            key: streamKey,
+            id: '>',
+          },
+          {
+            COUNT: this.msgBatchSize,
+            BLOCK: 1000, // Wait 1 second for new events.
+          }
         );
-        this.logger.info('StacksMessageStream consumer group ready, starting to read messages');
-        break;
+        if (!results || results.length === 0) {
+          continue;
+        }
+        for (const stream of results) {
+          if (stream.messages.length > 0) {
+            this.logger.debug(
+              `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
+            );
+          }
+          for (const item of stream.messages) {
+            await eventCallback(item.id, item.message.timestamp, {
+              path: item.message.path as MessagePath,
+              payload: JSON.parse(item.message.body),
+            });
+
+            this.lastProcessedMessageId = item.id;
+            this.events.emit('msgReceived', { id: item.id });
+
+            await this.client
+              .multi()
+              // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
+              .xAck(streamKey, StacksMessageStream.GROUP_NAME, item.id)
+              // Delete the message from the stream so that it doesn't get reprocessed
+              .xDel(streamKey, item.id)
+              .exec();
+          }
+        }
       } catch (err) {
-        if ((err as Error).message?.includes('NOGROUP')) {
-          // Group not created yet, wait and retry
+        const errMsg = (err as Error).message ?? '';
+        if (errMsg.includes('NOGROUP') || errMsg.includes('MKSTREAM')) {
+          // Stream or group not created yet, wait and retry
+          readGroupFailures++;
+          if (readGroupFailures >= 10) {
+            this.logger.error(
+              err as Error,
+              `Failed to read group after ${readGroupFailures} retries, giving up`
+            );
+            throw err;
+          }
           await timeout(100);
           continue;
         }
         throw err;
-      }
-    }
-
-    while (!this.abort.signal.aborted) {
-      // The backend creates the group with the correct starting position based on index_block_hash,
-      // so we use '>' here to get only messages after the last message ID.
-      const results = await this.client.xReadGroup(
-        StacksMessageStream.GROUP_NAME,
-        StacksMessageStream.CONSUMER_NAME,
-        {
-          key: streamKey,
-          id: '>',
-        },
-        {
-          COUNT: this.msgBatchSize,
-          BLOCK: 1000, // Wait 1 second for new events.
-        }
-      );
-      if (!results || results.length === 0) {
-        continue;
-      }
-      for (const stream of results) {
-        if (stream.messages.length > 0) {
-          this.logger.debug(
-            `StacksMessageStream received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id}`
-          );
-        }
-        for (const item of stream.messages) {
-          await eventCallback(item.id, item.message.timestamp, {
-            path: item.message.path as MessagePath,
-            payload: JSON.parse(item.message.body),
-          });
-
-          this.lastProcessedMessageId = item.id;
-          this.events.emit('msgReceived', { id: item.id });
-
-          await this.client
-            .multi()
-            // Acknowledge the message so that it is removed from the server's Pending Entries List (PEL)
-            .xAck(streamKey, StacksMessageStream.GROUP_NAME, item.id)
-            // Delete the message from the stream so that it doesn't get reprocessed
-            .xDel(streamKey, item.id)
-            .exec();
-        }
       }
     }
   }

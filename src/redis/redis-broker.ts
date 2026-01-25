@@ -406,70 +406,26 @@ export class RedisBroker {
 
     // Resolve the starting position to a sequence number for backfilling.
     // Priority: lastMessageId > lastIndexBlockHash > start from beginning
-    let lastQueriedSequenceNumber: string = '0';
+    let lastQueriedSequenceNumber = await this.getClientStartMessageSequenceNumber(
+      startingPosition,
+      logger
+    );
 
-    if (startingPosition.lastMessageId) {
-      // Validate the message ID exists and is not greater than the highest available
-      const validationResult = await this.db.validateAndResolveMessageId(
-        startingPosition.lastMessageId
-      );
-      if (validationResult) {
-        lastQueriedSequenceNumber = validationResult.sequenceNumber;
-        if (validationResult.clampedToMax) {
-          logger.info(
-            `Message ID ${startingPosition.lastMessageId} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
-          );
-        } else {
-          logger.info(`Using validated message ID: ${lastQueriedSequenceNumber}-0`);
-        }
-      } else {
-        logger.warn(
-          `Message ID ${startingPosition.lastMessageId} is invalid or database is empty, starting from beginning`
-        );
-      }
-    } else if (startingPosition.lastIndexBlockHash) {
-      // Resolve the index block hash to a sequence number
-      const lastBlockHeight = startingPosition.lastBlockHeight
-        ? parseInt(startingPosition.lastBlockHeight)
-        : undefined;
-      const resolutionResult = await this.db.resolveIndexBlockHashToSequenceNumber(
-        startingPosition.lastIndexBlockHash,
-        lastBlockHeight
-      );
-      if (resolutionResult) {
-        lastQueriedSequenceNumber = resolutionResult.sequenceNumber;
-        if (resolutionResult.clampedToMax) {
-          logger.info(
-            `Block hash ${startingPosition.lastIndexBlockHash} not found but height ${lastBlockHeight} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
-          );
-        } else {
-          logger.info(
-            `Resolved block hash ${startingPosition.lastIndexBlockHash} to sequence number ${lastQueriedSequenceNumber}-0`
-          );
-        }
-      } else {
-        logger.warn(
-          `Unable to resolve index block hash ${startingPosition.lastIndexBlockHash} to message sequence number, starting from beginning`
-        );
-      }
-    } else {
-      logger.info('No starting position provided, starting from beginning');
-    }
-
-    // We need to create a unique redis stream for this client, then backfill it with messages starting
-    // from the resolved sequence number. Backfilling is performed by reading messages from
+    // We need to create a unique redis stream for this client, then backfill it with messages
+    // starting from the resolved sequence number. Backfilling is performed by reading messages from
     // postgres, then writing them to the client's redis stream.
     //
     // Once we've backfilled the stream, we can start streaming messages live from the global redis
     // stream to the client redis stream.
     //
-    // This is a bit tricky because we need to do this atomically so that no messages are missed during the
-    // switch from backfilling to live-streaming.
+    // This is a bit tricky because we need to do this atomically so that no messages are missed
+    // during the switch from backfilling to live-streaming.
 
-    // First, we create a consumer group for the global stream for this client. This ensures that the global
-    // stream will not discard new messages that this client might after we've finished backfilling from postgres.
-    // The special key `$` instructs redis to hold onto all new messages, which could be added to the stream
-    // right after the postgres backfilling is complete, but before we transition to live streaming.
+    // First, we create a consumer group for the global stream for this client. This ensures that
+    // the global stream will not discard new messages that this client might after we've finished
+    // backfilling from postgres. The special key `$` instructs redis to hold onto all new messages,
+    // which could be added to the stream right after the postgres backfilling is complete, but
+    // before we transition to live streaming.
     const msgId = '$';
 
     await client
@@ -506,10 +462,6 @@ export class RedisBroker {
       //
       // TODO: Move sql code to a readonly-only pg-store class, and consider making the interface with the
       // persisted-storage layer agnostic to whatever storage is used.
-      const messageFilter =
-        selectedPaths === '*'
-          ? this.db.sql``
-          : this.db.sql`AND path IN ${this.db.sql(selectedPaths)}`;
       const dbResults = await this.db.sql<
         { sequence_number: string; timestamp: string; path: string; content: string }[]
       >`
@@ -519,7 +471,11 @@ export class RedisBroker {
           path,
           content
         FROM messages
-        WHERE sequence_number > ${lastQueriedSequenceNumber} ${messageFilter}
+        WHERE sequence_number > ${lastQueriedSequenceNumber} ${
+          selectedPaths === '*'
+            ? this.db.sql``
+            : this.db.sql`AND path IN ${this.db.sql(selectedPaths)}`
+        }
         ORDER BY sequence_number ASC
         LIMIT ${ENV.DB_MSG_BATCH_SIZE}
       `.catch((error: unknown) => {
@@ -666,6 +622,75 @@ export class RedisBroker {
         }
       }
     }
+  }
+
+  /**
+   * Determines the starting position for a client by resolving the lastIndexBlockHash to a sequence
+   * number or validating the lastMessageId exists and is not greater than the highest available.
+   * @param startingPosition - The starting position containing either lastIndexBlockHash or
+   * lastMessageId
+   * @param logger - The logger to use for logging
+   * @returns The sequence number to start backfilling from
+   */
+  private async getClientStartMessageSequenceNumber(
+    startingPosition: {
+      lastIndexBlockHash: string;
+      lastBlockHeight: string;
+      lastMessageId: string;
+    },
+    logger: typeof this.logger
+  ): Promise<string> {
+    let lastQueriedSequenceNumber: string = '0';
+
+    if (startingPosition.lastMessageId) {
+      // Validate the message ID exists and is not greater than the highest available
+      const validationResult = await this.db.validateAndResolveMessageId(
+        startingPosition.lastMessageId
+      );
+      if (validationResult) {
+        lastQueriedSequenceNumber = validationResult.sequenceNumber;
+        if (validationResult.clampedToMax) {
+          logger.info(
+            `Message ID ${startingPosition.lastMessageId} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
+          );
+        } else {
+          logger.info(`Using validated message ID: ${lastQueriedSequenceNumber}-0`);
+        }
+      } else {
+        logger.warn(
+          `Message ID ${startingPosition.lastMessageId} is invalid or database is empty, starting from beginning`
+        );
+      }
+    } else if (startingPosition.lastIndexBlockHash) {
+      // Resolve the index block hash to a sequence number
+      const lastBlockHeight = startingPosition.lastBlockHeight
+        ? parseInt(startingPosition.lastBlockHeight)
+        : undefined;
+      const resolutionResult = await this.db.resolveIndexBlockHashToSequenceNumber(
+        startingPosition.lastIndexBlockHash,
+        lastBlockHeight
+      );
+      if (resolutionResult) {
+        lastQueriedSequenceNumber = resolutionResult.sequenceNumber;
+        if (resolutionResult.clampedToMax) {
+          logger.info(
+            `Block hash ${startingPosition.lastIndexBlockHash} not found but height ${lastBlockHeight} exceeds highest available, clamped to: ${lastQueriedSequenceNumber}-0`
+          );
+        } else {
+          logger.info(
+            `Resolved block hash ${startingPosition.lastIndexBlockHash} to sequence number ${lastQueriedSequenceNumber}-0`
+          );
+        }
+      } else {
+        logger.warn(
+          `Unable to resolve index block hash ${startingPosition.lastIndexBlockHash} to message sequence number, starting from beginning`
+        );
+      }
+    } else {
+      logger.info('No starting position provided, starting from beginning');
+    }
+
+    return lastQueriedSequenceNumber;
   }
 
   // Cleanup old message that are no longer needed by any consumers. This works by determining the oldest

@@ -15,7 +15,6 @@ import {
   testWithFailCb,
   withTimeout,
 } from './utils';
-import { Message, MessagePath } from '../../client/src/messages';
 
 describe('Stackerdb ingestion tests', () => {
   let db: PgStore;

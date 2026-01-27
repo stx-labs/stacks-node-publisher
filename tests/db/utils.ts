@@ -1,7 +1,90 @@
+import * as fs from 'node:fs';
+import * as readline from 'node:readline/promises';
+import * as zlib from 'node:zlib';
+import { Registry } from 'prom-client';
 import { StacksMessageStream, SelectedMessagePaths } from '../../client/src';
 import { ENV } from '../../src/env';
 import { EventObserverServer } from '../../src/event-observer/event-server';
+import { PgStore } from '../../src/pg/pg-store';
+import { RedisBroker } from '../../src/redis/redis-broker';
 import { RedisClient } from '../../src/redis/redis-types';
+
+export type IntegrationTestEnv = {
+  db: PgStore;
+  redisBroker: RedisBroker;
+  eventServer: EventObserverServer;
+};
+
+/**
+ * Sets up a test environment with PgStore, RedisBroker, and EventObserverServer.
+ * Optionally loads a dump file into the database.
+ */
+export async function setupIntegrationTestEnv(options?: {
+  /** Path to a .tsv.gz dump file to load into the database */
+  dumpFile?: string;
+}): Promise<IntegrationTestEnv> {
+  const db = await PgStore.connect();
+
+  const redisBroker = new RedisBroker({
+    redisUrl: ENV.REDIS_URL,
+    redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+    db: db,
+  });
+  await redisBroker.connect({ waitForReady: true });
+
+  const promRegistry = new Registry();
+  const eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
+  await eventServer.start({ port: 0, host: '127.0.0.1' });
+
+  if (options?.dumpFile) {
+    await loadEventsDump(eventServer, redisBroker, options.dumpFile);
+  }
+
+  return { db, redisBroker, eventServer };
+}
+
+/**
+ * Tears down the test environment created by `setupTestEnv`.
+ */
+export async function teardownIntegrationTestEnv(env: IntegrationTestEnv): Promise<void> {
+  await closeTestClients();
+  await env.eventServer.close();
+  await env.db.close();
+  await redisFlushAllWithPrefix(env.redisBroker.redisStreamKeyPrefix, env.redisBroker.client);
+  await env.redisBroker.close();
+}
+
+/**
+ * Loads a .tsv.gz events dump file into the event server.
+ */
+async function loadEventsDump(
+  eventServer: EventObserverServer,
+  redisBroker: RedisBroker,
+  dumpFile: string
+): Promise<void> {
+  const rl = readline.createInterface({
+    input: fs.createReadStream(dumpFile).pipe(zlib.createGunzip()),
+    crlfDelay: Infinity,
+  });
+  // Suppress noisy logs during bulk insertion
+  const spyInfoLogs = [
+    jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}),
+    jest.spyOn(redisBroker.logger, 'info').mockImplementation(() => {}),
+  ];
+  for await (const line of rl) {
+    const [_id, timestamp, path, payload] = line.split('\t');
+    const res = await fetch(eventServer.url + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Original-Timestamp': timestamp },
+      body: payload,
+    });
+    if (res.status !== 200) {
+      throw new Error(`Failed to POST event: ${path} - ${payload.slice(0, 100)}`);
+    }
+  }
+  rl.close();
+  spyInfoLogs.forEach(spy => spy.mockRestore());
+}
 
 export async function sendTestEvent(
   eventServer: EventObserverServer,

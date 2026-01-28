@@ -455,7 +455,7 @@ export class RedisBroker {
           sequence_number,
           (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
           path,
-          content::text AS content
+          content
         FROM messages
         WHERE sequence_number > ${lastQueriedSequenceNumber} ${
           selectedPaths === '*'
@@ -495,7 +495,7 @@ export class RedisBroker {
         const redisMsg = {
           timestamp: row.timestamp,
           path: row.path,
-          body: row.content,
+          body: JSON.stringify(row.content),
         };
         multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
       }

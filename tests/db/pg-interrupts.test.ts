@@ -82,7 +82,7 @@ describe('Postgres interrupts', () => {
     // Expect the last ingested msg is _not_ the one we just tried to send
     let lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(lastIngestedMsg);
+    expect(lastDbMsg.content).toEqual(lastIngestedMsg);
 
     // Retry the failed event insertion (like stacks-core would)
     postEventResult = await sendTestEvent(eventServer, testEventBody, false);
@@ -91,7 +91,7 @@ describe('Postgres interrupts', () => {
     // Ensure last ingested msg is the one we just sent
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('event-observer server returns non-200 when pg is down', async () => {
@@ -121,7 +121,7 @@ describe('Postgres interrupts', () => {
     // Expect the last ingested msg is _not_ the one we just tried to send
     let lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(lastIngestedMsg);
+    expect(lastDbMsg.content).toEqual(lastIngestedMsg);
 
     // Retry the failed event insertion (like stacks-core would)
     postEventResult = await sendTestEvent(eventServer, testEventBody, false);
@@ -130,7 +130,7 @@ describe('Postgres interrupts', () => {
     // Ensure last ingested msg is the one we just sent
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('client recovers after pg error during backfilling', async () => {

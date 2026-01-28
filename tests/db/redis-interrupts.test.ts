@@ -84,7 +84,7 @@ describe('Redis interrupts', () => {
     expect(postEventResult.status).toBe(200);
     const lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('client connect succeeds once redis is available', async () => {

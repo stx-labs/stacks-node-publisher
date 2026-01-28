@@ -30,10 +30,12 @@
     "url": "https://github.com/hirosystems/salt-n-pepper/issues"
   },
   "homepage": "https://github.com/hirosystems/salt-n-pepper#readme",
+  "prettier": "@stacks/prettier-config",
   "devDependencies": {
     "@commitlint/cli": "^19.6.1",
     "@commitlint/config-conventional": "^19.6.0",
     "@eslint/js": "^9.21.0",
+    "@stacks/prettier-config": "^0.0.10",
     "@types/dockerode": "^3.3.33",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.13.9",

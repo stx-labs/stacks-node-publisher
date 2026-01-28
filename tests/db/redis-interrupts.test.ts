@@ -16,7 +16,7 @@ import {
   withTimeout,
 } from './utils';
 import { once } from 'node:events';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Redis interrupts', () => {
   let db: PgStore;
@@ -84,23 +84,22 @@ describe('Redis interrupts', () => {
     expect(postEventResult.status).toBe(200);
     const lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('client connect succeeds once redis is available', async () => {
     await testWithFailCb(async fail => {
       const lastDbMsg = await db.getLastMessage();
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       const testMsg1 = { test: randomUUID() };
       let lastMsgWaiter = waiter<any>();
-      client.start((_id, _timestamp, _path, body) => {
-        lastMsgWaiter.finish(body);
-        return Promise.resolve();
-      });
+      client.start(
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, message: Message) => {
+          lastMsgWaiter.finish(message.payload);
+          return Promise.resolve();
+        }
+      );
 
       // Client receives msg when redis is available
       await sendTestEvent(eventServer, testMsg1);
@@ -155,11 +154,7 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       const addRedisMsgThrow = waiter<{ msgId: string }>();
       const onRedisAddMsg = redisBroker._testHooks!.onAddStacksMsg.register(async msgId => {
@@ -170,13 +165,16 @@ describe('Redis interrupts', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Process all msgs
       lastDbMsg = await db.getLastMessage();
@@ -187,7 +185,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -203,11 +203,11 @@ describe('Redis interrupts', () => {
       assert(lastDbMsg);
       expect(lastDbMsg).toMatchObject({
         sequence_number: thrownMsgId.msgId,
-        content: JSON.stringify(throwMsgPayload),
+        content: throwMsgPayload,
       });
 
       // We expect the client to not have received the message we threw on (simulating redis ingestion failure)
-      expect(parseInt(client.lastMessageId.split('-')[0])).toBeLessThan(
+      expect(parseInt(client.lastProcessedMessageId.split('-')[0])).toBeLessThan(
         parseInt(thrownMsgId.msgId.split('-')[0])
       );
 
@@ -229,7 +229,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -274,11 +276,7 @@ describe('Redis interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       // right after pg data is inserted, wipe redis data before inserting into redis
       const onRedisWiped = waiter<{ msgId: string }>();
@@ -289,13 +287,16 @@ describe('Redis interrupts', () => {
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       // Process all msgs
       lastDbMsg = await db.getLastMessage();
@@ -306,7 +307,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });
@@ -335,7 +338,7 @@ describe('Redis interrupts', () => {
       assert(lastDbMsg);
       expect(lastDbMsg).toMatchObject({
         sequence_number: wipedMsgId.msgId,
-        content: JSON.stringify(emptyRedisMsgPayload),
+        content: emptyRedisMsgPayload,
       });
 
       // Ensure client was able to reconnect and receive the missing messages
@@ -347,7 +350,9 @@ describe('Redis interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

@@ -14,7 +14,7 @@ import {
 } from './utils';
 import { once } from 'node:events';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
-import { StacksEventStreamType } from '../../client/src';
+import { Message } from '../../client/src/messages';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;
@@ -82,7 +82,7 @@ describe('Postgres interrupts', () => {
     // Expect the last ingested msg is _not_ the one we just tried to send
     let lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(lastIngestedMsg);
+    expect(lastDbMsg.content).toEqual(lastIngestedMsg);
 
     // Retry the failed event insertion (like stacks-core would)
     postEventResult = await sendTestEvent(eventServer, testEventBody, false);
@@ -91,7 +91,7 @@ describe('Postgres interrupts', () => {
     // Ensure last ingested msg is the one we just sent
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('event-observer server returns non-200 when pg is down', async () => {
@@ -121,7 +121,7 @@ describe('Postgres interrupts', () => {
     // Expect the last ingested msg is _not_ the one we just tried to send
     let lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(lastIngestedMsg);
+    expect(lastDbMsg.content).toEqual(lastIngestedMsg);
 
     // Retry the failed event insertion (like stacks-core would)
     postEventResult = await sendTestEvent(eventServer, testEventBody, false);
@@ -130,7 +130,7 @@ describe('Postgres interrupts', () => {
     // Ensure last ingested msg is the one we just sent
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('client recovers after pg error during backfilling', async () => {
@@ -144,11 +144,7 @@ describe('Postgres interrupts', () => {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      const client = await createTestClient(
-        lastDbMsg?.sequence_number,
-        StacksEventStreamType.all,
-        fail
-      );
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
 
       let backfillQueries = 0;
       const onBackfillQueryError = waiter<{ msgId: string }>();
@@ -165,13 +161,16 @@ describe('Postgres interrupts', () => {
       );
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
-      client.start(async (_id, _timestamp, _path, _body) => {
-        if (!firstMsgsReceived.isFinished) {
-          // Grab the original client ID before the client reconnects
-          firstMsgsReceived.finish({ originalClientId: client.clientId });
+      client.start(
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (_id: string, _timestamp: string, _message: Message) => {
+          if (!firstMsgsReceived.isFinished) {
+            // Grab the original client ID before the client reconnects
+            firstMsgsReceived.finish({ originalClientId: client.clientId });
+          }
+          return Promise.resolve();
         }
-        return Promise.resolve();
-      });
+      );
 
       const onClientRedisGroupDestroyed = waiter();
       client.events.once('redisConsumerGroupDestroyed', () => {
@@ -200,7 +199,9 @@ describe('Postgres interrupts', () => {
             resolve();
           }
         });
-        if (client.lastMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
+        if (
+          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
+        ) {
           resolve();
         }
       });

@@ -4,7 +4,6 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { closeTestClients, createTestClient, sendTestEvent, testWithFailCb } from './utils';
-import { StacksEventStreamType } from '../../client/src';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -60,13 +59,16 @@ describe('Prune tests', () => {
       trimResult = await redisBroker.trimGlobalStream();
       expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
 
-      const client = await createTestClient(undefined, StacksEventStreamType.all, fail);
+      const client = await createTestClient(undefined, '*', fail);
 
       const lastClientMsgId = await new Promise<number>(resolve => {
-        client.start(id => {
-          resolve(parseInt(id.split('-')[0]));
-          return Promise.resolve();
-        });
+        client.start(
+          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+          async (id: string) => {
+            resolve(parseInt(id.split('-')[0]));
+            return Promise.resolve();
+          }
+        );
       });
 
       // One consumer still processing a msg, expect trim to minid of the last msg received
@@ -76,13 +78,16 @@ describe('Prune tests', () => {
 
       const testFn = redisBroker._testHooks!.onTrimGlobalStreamGetGroups.register(async () => {
         // This is called in the middle of the trim operation, add a new consumer
-        const newClient = await createTestClient(undefined, StacksEventStreamType.all, fail);
+        const newClient = await createTestClient(undefined, '*', fail);
         // Wait for the client to receive a message so that we know its group is registered on the server
         await new Promise<void>(resolve => {
-          newClient.start(() => {
-            resolve();
-            return Promise.resolve();
-          });
+          newClient.start(
+            async () => Promise.resolve({ messageId: newClient.lastProcessedMessageId }),
+            async () => {
+              resolve();
+              return Promise.resolve();
+            }
+          );
         });
         await newClient.stop();
         testFn.unregister();

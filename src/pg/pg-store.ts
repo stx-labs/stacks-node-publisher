@@ -99,7 +99,7 @@ export class PgStore extends BasePgStore {
         sequence_number,
         (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
         path,
-        content
+        content::text AS content
       FROM messages
       ORDER BY sequence_number DESC
       LIMIT 1

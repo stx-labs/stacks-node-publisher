@@ -84,7 +84,7 @@ describe('Redis interrupts', () => {
     expect(postEventResult.status).toBe(200);
     const lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(JSON.parse(lastDbMsg.content)).toEqual(testEventBody);
+    expect(lastDbMsg.content).toEqual(testEventBody);
   });
 
   test('client connect succeeds once redis is available', async () => {
@@ -203,7 +203,7 @@ describe('Redis interrupts', () => {
       assert(lastDbMsg);
       expect(lastDbMsg).toMatchObject({
         sequence_number: thrownMsgId.msgId,
-        content: JSON.stringify(throwMsgPayload),
+        content: throwMsgPayload,
       });
 
       // We expect the client to not have received the message we threw on (simulating redis ingestion failure)
@@ -338,7 +338,7 @@ describe('Redis interrupts', () => {
       assert(lastDbMsg);
       expect(lastDbMsg).toMatchObject({
         sequence_number: wipedMsgId.msgId,
-        content: JSON.stringify(emptyRedisMsgPayload),
+        content: emptyRedisMsgPayload,
       });
 
       // Ensure client was able to reconnect and receive the missing messages

@@ -91,6 +91,7 @@ export class PgStore extends BasePgStore {
     return { sequence_number, timestamp };
   }
 
+  /** For testing purposes, returns the last message in the database. */
   public async getLastMessage() {
     const dbResults = await this.sql<
       { sequence_number: string; timestamp: string; path: string; content: string }[]
@@ -99,7 +100,7 @@ export class PgStore extends BasePgStore {
         sequence_number,
         (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
         path,
-        content::text AS content
+        content
       FROM messages
       ORDER BY sequence_number DESC
       LIMIT 1

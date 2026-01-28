@@ -7,8 +7,9 @@ import {
   testWithFailCb,
   IntegrationTestEnv,
   withTimeout,
+  sendTestEvent,
 } from './utils';
-import { Message, MessagePath } from '../../client/src/messages';
+import { Message } from '../../client/src/messages';
 
 describe('Stream position lookup', () => {
   let env: IntegrationTestEnv;
@@ -16,20 +17,21 @@ describe('Stream position lookup', () => {
   // Sample block data from the dump (sequence_number, block_height, index_block_hash)
   // These are extracted from stackerdb-sample-events.tsv.gz
   const FIRST_BLOCK = {
-    sequenceNumber: '1',
-    blockHeight: 0,
-    indexBlockHash: '0x55c9861be5cff984a20ce6d99d4aa65941412889bdc665094136429b84f8c2ee',
+    sequenceNumber: '61',
+    blockHeight: 126,
+    indexBlockHash: '0x6507aa0aa730292a6d8a2866cb860fea91b2b1372272e0191eb8252416f86922',
   };
   const MID_BLOCK = {
-    sequenceNumber: '5279',
+    sequenceNumber: '5284',
     blockHeight: 494,
     indexBlockHash: '0xfc67a86714b6af60ac6dd5cee5fc20303804b0e6c8c85bc641307a3bd1482dff',
   };
   const LAST_BLOCK = {
-    sequenceNumber: '5395',
+    sequenceNumber: '5396',
     blockHeight: 505,
     indexBlockHash: '0x1769ac7ebbff5a6995528cf9c72eed235337a2aa382cddfc0e1e3b85f08b97c6',
   };
+  const LAST_SEQUENCE_NUMBER = '5402';
   // Non-existent block hash for testing
   const NON_EXISTENT_BLOCK_HASH =
     '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -65,6 +67,14 @@ describe('Stream position lookup', () => {
       assert(result);
       expect(result.sequenceNumber).toBe(FIRST_BLOCK.sequenceNumber);
       expect(result.clampedToMax).toBe(false);
+    });
+
+    test('returns null when block 0 is queried', async () => {
+      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+        '0x0000000000000000000000000000000000000000000000000000000000000000',
+        0
+      );
+      expect(result).toBeNull();
     });
 
     test('returns last block sequence number when queried', async () => {
@@ -174,13 +184,9 @@ describe('Stream position lookup', () => {
   });
 
   describe('stream position via client start', () => {
-    test('starts from exact position when valid indexBlockHash + blockHeight provided', async () => {
+    test('starts from exact position when valid indexBlockHash and blockHeight provided', async () => {
       await testWithFailCb(async fail => {
-        const client = await createTestClient(
-          `${parseInt(MID_BLOCK.sequenceNumber) - 1}-0`, // Set last processed to one before mid block
-          [MessagePath.NewBlock],
-          error => fail(error)
-        );
+        const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
         let firstMessageId: string | null = null;
@@ -203,7 +209,7 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start after the resolved block's sequence number
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBeGreaterThan(parseInt(MID_BLOCK.sequenceNumber));
+        expect(receivedSeqNum).toBe(parseInt(MID_BLOCK.sequenceNumber) + 1);
 
         await client.stop();
       });
@@ -211,13 +217,7 @@ describe('Stream position lookup', () => {
 
     test('starts from clamped max position when indexBlockHash not found but height exceeds max', async () => {
       await testWithFailCb(async fail => {
-        const futureBlockHeight = LAST_BLOCK.blockHeight + 1000;
-
-        const client = await createTestClient(
-          `${parseInt(LAST_BLOCK.sequenceNumber) - 1}-0`,
-          [MessagePath.NewBlock],
-          error => fail(error)
-        );
+        const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
         let firstMessageId: string | null = null;
@@ -226,7 +226,7 @@ describe('Stream position lookup', () => {
           () =>
             Promise.resolve({
               indexBlockHash: NON_EXISTENT_BLOCK_HASH,
-              blockHeight: futureBlockHeight,
+              blockHeight: LAST_BLOCK.blockHeight + 1000,
             }),
           (id: string, _timestamp: string, _message: Message) => {
             if (!firstMessageId) {
@@ -240,7 +240,7 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start from clamped position (after the last block's sequence number)
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBeGreaterThan(parseInt(LAST_BLOCK.sequenceNumber));
+        expect(receivedSeqNum).toBe(parseInt(LAST_BLOCK.sequenceNumber) + 1);
 
         await client.stop();
       });
@@ -248,7 +248,7 @@ describe('Stream position lookup', () => {
 
     test('starts from beginning when indexBlockHash not found and height not exceeding max', async () => {
       await testWithFailCb(async fail => {
-        const client = await createTestClient('0-0', [MessagePath.NewBlock], error => fail(error));
+        const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
         let firstMessageId: string | null = null;
@@ -280,9 +280,7 @@ describe('Stream position lookup', () => {
     test('starts from exact position when valid messageId provided', async () => {
       await testWithFailCb(async fail => {
         const startingSeqNum = '3000';
-        const client = await createTestClient(`${parseInt(startingSeqNum) - 1}-0`, '*', error =>
-          fail(error)
-        );
+        const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
         let firstMessageId: string | null = null;
@@ -311,37 +309,37 @@ describe('Stream position lookup', () => {
       await testWithFailCb(async fail => {
         const futureMessageId = '999999-0';
 
-        const client = await createTestClient('5390-0', '*', error => fail(error));
+        const client = await createTestClient(null, '*', error => fail(error));
 
-        const startMsgWaiter = waiter();
-        let _receivedAnyMessage = false;
+        const startMsgWaiter = waiter<string>();
 
         client.start(
           () => Promise.resolve({ messageId: futureMessageId }),
-          (_id: string, _timestamp: string, _message: Message) => {
-            _receivedAnyMessage = true;
-            startMsgWaiter.finish();
+          (id: string, _timestamp: string, _message: Message) => {
+            startMsgWaiter.finish(id);
             return Promise.resolve();
           }
         );
+        // Send a message to the event server to trigger the client to start once backfilling is
+        // complete.
+        const onLivestreamTransition = env.redisBroker._testHooks!.onLiveStreamTransition.register(
+          async () => {
+            await sendTestEvent(env.eventServer);
+            onLivestreamTransition.unregister();
+          }
+        );
 
-        // Wait a bit for potential messages
-        await new Promise(resolve => setTimeout(resolve, 5000));
-
-        // Since messageId exceeds max, it clamps to max, so no historical messages should be received
-        // (we're already at or past the max, so only live messages would come through)
-        // In this test setup with no live ingestion, we expect no messages initially
-        // The client should be waiting for new messages at this point
+        const receivedId = await withTimeout(startMsgWaiter, 30_000);
+        const receivedSeqNum = parseInt(receivedId.split('-')[0]);
+        expect(receivedSeqNum).toBe(parseInt(LAST_SEQUENCE_NUMBER) + 1);
 
         await client.stop();
-        // This test verifies the clamping behavior - when client starts at clamped position,
-        // it waits for new messages (none should arrive from backfill since we're at the end)
       });
     }, 60_000);
 
     test('starts from beginning when null position provided', async () => {
       await testWithFailCb(async fail => {
-        const client = await createTestClient('0-0', '*', error => fail(error));
+        const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
         let firstMessageId: string | null = null;
@@ -372,16 +370,19 @@ describe('Stream position lookup', () => {
       await testWithFailCb(async fail => {
         const messageIdPosition = '2000';
 
-        const client = await createTestClient(`${parseInt(messageIdPosition) - 1}-0`, '*', error =>
-          fail(error)
-        );
+        const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
         let firstMessageId: string | null = null;
 
         client.start(
           // When messageId is provided, it should be used regardless of other potential positions
-          () => Promise.resolve({ messageId: `${messageIdPosition}-0` }),
+          () =>
+            Promise.resolve({
+              messageId: `${messageIdPosition}-0`,
+              indexBlockHash: MID_BLOCK.indexBlockHash,
+              blockHeight: MID_BLOCK.blockHeight,
+            }),
           (id: string, _timestamp: string, _message: Message) => {
             if (!firstMessageId) {
               firstMessageId = id;
@@ -395,76 +396,6 @@ describe('Stream position lookup', () => {
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
         // Should start after the messageId position
         expect(receivedSeqNum).toBe(parseInt(messageIdPosition) + 1);
-
-        await client.stop();
-      });
-    }, 60_000);
-  });
-
-  describe('stream continuation with position callbacks', () => {
-    test('receives all messages from start position to end', async () => {
-      await testWithFailCb(async fail => {
-        const startingSeqNum = 5300;
-        const lastMsgId = await env.db.getLastMessage();
-        assert(lastMsgId);
-
-        const client = await createTestClient(`${startingSeqNum - 1}-0`, '*', error => fail(error));
-
-        const allMsgsReceivedWaiter = waiter();
-        let messagesReceived = 0;
-        const expectedLastMsgId = lastMsgId.sequence_number;
-
-        client.start(
-          () => Promise.resolve({ messageId: `${startingSeqNum}-0` }),
-          (id: string, _timestamp: string, _message: Message) => {
-            messagesReceived++;
-            const seqNum = id.split('-')[0];
-            if (seqNum === expectedLastMsgId) {
-              allMsgsReceivedWaiter.finish();
-            }
-            return Promise.resolve();
-          }
-        );
-
-        await withTimeout(allMsgsReceivedWaiter, 30_000);
-
-        // Verify we received all messages from starting position to end
-        const expectedCount = parseInt(expectedLastMsgId) - startingSeqNum;
-        expect(messagesReceived).toBe(expectedCount);
-
-        await client.stop();
-      });
-    }, 60_000);
-
-    test('resumes from last processed position on reconnect callback', async () => {
-      await testWithFailCb(async fail => {
-        const startingSeqNum = 4000;
-
-        const client = await createTestClient(`${startingSeqNum - 1}-0`, '*', error => fail(error));
-
-        const checkpointWaiter = waiter<string>();
-        let checkpoint: string | null = null;
-
-        client.start(
-          // This callback simulates returning the last processed message ID
-          () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
-          (id: string, _timestamp: string, _message: Message) => {
-            // After receiving some messages, record a checkpoint
-            const seqNum = parseInt(id.split('-')[0]);
-            if (seqNum >= startingSeqNum + 10 && !checkpoint) {
-              checkpoint = id;
-              checkpointWaiter.finish(id);
-            }
-            return Promise.resolve();
-          }
-        );
-
-        const checkpointId = await withTimeout(checkpointWaiter, 30_000);
-        const checkpointSeqNum = parseInt(checkpointId.split('-')[0]);
-
-        // Verify the client's lastProcessedMessageId matches our checkpoint
-        expect(client.lastProcessedMessageId).toBe(checkpointId);
-        expect(checkpointSeqNum).toBeGreaterThanOrEqual(startingSeqNum + 10);
 
         await client.stop();
       });

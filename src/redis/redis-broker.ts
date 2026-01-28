@@ -455,7 +455,7 @@ export class RedisBroker {
           sequence_number,
           (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
           path,
-          content
+          content::text AS content
         FROM messages
         WHERE sequence_number > ${lastQueriedSequenceNumber} ${
           selectedPaths === '*'

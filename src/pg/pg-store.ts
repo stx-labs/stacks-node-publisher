@@ -81,7 +81,7 @@ export class PgStore extends BasePgStore {
     }
     const insertQuery = await this.sql<{ sequence_number: string; timestamp: string }[]>`
       INSERT INTO messages (created_at, path, content)
-      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${content}::jsonb)
+      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${JSON.parse(content)})
       RETURNING sequence_number, (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp
     `;
     if (insertQuery.length !== 1) {
@@ -122,13 +122,17 @@ export class PgStore extends BasePgStore {
     blockHeight?: number
   ): Promise<{ sequenceNumber: string; clampedToMax: boolean } | null> {
     if (!indexBlockHash || indexBlockHash === '') return null;
+    // Block 0 can appear at any time randomly. To be safe, we don't allow it to be used as a
+    // starting point.
+    if (blockHeight === 0) return null;
 
-    // First, try to find the exact block hash
+    // First, try to find the exact block hash (get the latest if multiple exist)
     const exactMatch = await this.sql<{ sequence_number: string }[]>`
       SELECT sequence_number
       FROM messages
       WHERE path = '/new_block'
         AND content->>'index_block_hash' = ${indexBlockHash}
+      ORDER BY sequence_number DESC
       LIMIT 1
     `;
     if (exactMatch.count > 0) {

@@ -45,15 +45,7 @@ describe('Redis interrupts', () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
-    try {
-      await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
-    } catch (error) {
-      console.error(
-        'Error flushing test Redis with prefix',
-        redisBroker.redisStreamKeyPrefix,
-        error
-      );
-    }
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
   });
 

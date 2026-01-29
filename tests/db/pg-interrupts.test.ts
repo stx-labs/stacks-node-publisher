@@ -12,7 +12,6 @@ import {
   sendTestEvent,
   testWithFailCb,
 } from './utils';
-import { once } from 'node:events';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
 import { Message } from '../../client/src/messages';
 
@@ -20,7 +19,6 @@ describe('Postgres interrupts', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
-  let redisDockerContainer: Docker.Container;
   let postgresDockerContainer: Docker.Container;
 
   beforeAll(async () => {
@@ -37,9 +35,6 @@ describe('Postgres interrupts', () => {
     eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
     await eventServer.start({ port: 0, host: '127.0.0.1' });
 
-    const redisContainerId = process.env['_REDIS_DOCKER_CONTAINER_ID']!;
-    redisDockerContainer = new Docker().getContainer(redisContainerId);
-
     const pgContainerId = process.env['_PG_DOCKER_CONTAINER_ID']!;
     postgresDockerContainer = new Docker().getContainer(pgContainerId);
   });
@@ -50,15 +45,6 @@ describe('Postgres interrupts', () => {
     await db.close();
     await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
-  });
-
-  beforeEach(async () => {
-    await redisDockerContainer.restart();
-    await Promise.all([
-      once(redisBroker.client, 'ready'),
-      once(redisBroker.ingestionClient, 'ready'),
-      once(redisBroker.listeningClient, 'ready'),
-    ]);
   });
 
   test('event-observer server returns non-200 on failed pg insertion', async () => {

@@ -300,7 +300,7 @@ describe('Backfill tests', () => {
         try {
           const clientRedisConnectionID = await client.client.clientId();
           const clientKillCount = await redisBroker.client.clientKill({
-            filter: CLIENT_KILL_FILTERS.ID,
+            filter: 'ID',
             id: clientRedisConnectionID,
           });
           expect(clientKillCount).toBe(1);
@@ -398,7 +398,7 @@ describe('Backfill tests', () => {
         assert(perConsumerClient);
         const perConsumerClientRedisConnectionID = await perConsumerClient.clientId();
         const clientKillCount = await redisBroker.client.clientKill({
-          filter: CLIENT_KILL_FILTERS.ID,
+          filter: 'ID',
           id: perConsumerClientRedisConnectionID,
         });
         expect(clientKillCount).toBe(1);
@@ -506,7 +506,7 @@ describe('Backfill tests', () => {
         await Promise.all(
           redisBrokerGlobalClientIds.map(async clientId => {
             const clientKillCount = await client.client.clientKill({
-              filter: CLIENT_KILL_FILTERS.ID,
+              filter: 'ID',
               id: clientId,
             });
             expect(clientKillCount).toBe(1);

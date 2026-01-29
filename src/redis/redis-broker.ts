@@ -6,10 +6,10 @@ import { createTestHook, isTestEnv } from '../helpers';
 import {
   closeRedisClient,
   destroyRedisClient,
-  type RedisClient,
-  type XInfoGroupsResponse,
-  type XInfoStreamEntry,
-  type XReadGroupResponseEntry,
+  RedisClient,
+  XInfoGroupsResponse,
+  XInfoStreamEntry,
+  XReadGroupResponseEntry,
 } from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';

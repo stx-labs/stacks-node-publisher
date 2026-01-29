@@ -150,7 +150,9 @@ async function waitForRedis(): Promise<void> {
       await timeout(100);
     }
   }
-  await redisClient.disconnect();
+  await redisClient.quit().catch((error: unknown) => {
+    console.error('Error quitting Redis client', error);
+  });
 }
 
 // Jest global setup

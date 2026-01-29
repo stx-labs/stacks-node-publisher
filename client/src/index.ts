@@ -62,6 +62,12 @@ export type StreamOptions = {
   batchSize?: number;
 };
 
+/** Type for xReadGroup response entries (Redis v5) */
+type XReadGroupResponseEntry = {
+  name: string;
+  messages: { id: string; message: Record<string, string> }[];
+};
+
 /**
  * A client for a Stacks core node message stream.
  */
@@ -270,10 +276,10 @@ export class StacksMessageStream {
           BLOCK: 1000, // Wait 1 second for new events.
         }
       );
-      if (!results || results.length === 0) {
+      if (!results) {
         continue;
       }
-      for (const stream of results) {
+      for (const stream of results as XReadGroupResponseEntry[]) {
         if (stream.messages.length > 0) {
           this.logger.debug(
             `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id} with client ${this.clientId}`
@@ -303,7 +309,7 @@ export class StacksMessageStream {
   async stop() {
     this.abort.abort();
     await this.streamWaiter;
-    await this.client.quit().catch((error: unknown) => {
+    await this.client.close().catch((error: unknown) => {
       if ((error as Error).message?.includes('client is closed')) {
         // ignore
       } else {

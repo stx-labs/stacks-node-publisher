@@ -104,10 +104,10 @@ describe('Endpoint tests', () => {
     let lastMsgId = '0';
     let messagedProcessed = 0;
     for (let i = 0; i < queuedMessageCount; i++) {
-      const streamMessages = await appRedisClient.xRead(
+      const streamMessages = (await appRedisClient.xRead(
         { key: streamKey, id: lastMsgId },
         { BLOCK: 3000, COUNT: 1 }
-      );
+      )) as { name: string; messages: { id: string; message: Record<string, string> }[] }[] | null;
       assert.ok(streamMessages);
       expect(streamMessages).toHaveLength(1);
       expect(streamMessages[0].messages).toHaveLength(1);

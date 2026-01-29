@@ -3,7 +3,14 @@ import { logger as defaultLogger, stopwatch, timeout } from '@hirosystems/api-to
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { createTestHook, isTestEnv } from '../helpers';
-import type { RedisClient, XInfoGroupsResponse } from './redis-types';
+import {
+  closeRedisClient,
+  destroyRedisClient,
+  RedisClient,
+  XInfoGroupsResponse,
+  XInfoStreamEntry,
+  XReadGroupResponseEntry,
+} from './redis-types';
 import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
 import { EventEmitter } from 'node:events';
 import { SelectedMessagePaths } from '../../client/src';
@@ -156,24 +163,24 @@ export class RedisBroker {
 
   async close() {
     this.abortController.abort();
-    await this.client.disconnect().catch((error: unknown) => {
+    await closeRedisClient(this.client).catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing primary redis client connection');
       }
     });
-    await this.ingestionClient.disconnect().catch((error: unknown) => {
+    await closeRedisClient(this.ingestionClient).catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing ingestion redis client connection');
       }
     });
-    await this.listeningClient.disconnect().catch((error: unknown) => {
+    await closeRedisClient(this.listeningClient).catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing listening redis client connection');
       }
     });
     await Promise.all(
       [...this.perConsumerClients].map(([client]) =>
-        client.disconnect().catch((error: unknown) => {
+        closeRedisClient(client).catch((error: unknown) => {
           if (!(error instanceof ClientClosedError)) {
             this.logger.debug(error, 'Error closing per-consumer redis client connection');
           }
@@ -229,8 +236,9 @@ export class RedisBroker {
       }
 
       // If there are groups (consumers) on the stream and the stream isn't new/empty, then check for gaps.
-      if (streamInfo && streamInfo.groups > 0 && streamInfo.lastEntry) {
-        const lastEntryId = parseInt(streamInfo.lastEntry.id.split('-')[0]);
+      const lastEntry = streamInfo?.['last-entry'] as XInfoStreamEntry | undefined;
+      if (streamInfo && streamInfo.groups > 0 && lastEntry) {
+        const lastEntryId = parseInt(lastEntry.id.split('-')[0]);
         if (lastEntryId + 1 < parseInt(args.sequenceNumber)) {
           this.events.emit('ingestionMsgGapDetected');
           this.logger.warn(
@@ -278,17 +286,17 @@ export class RedisBroker {
   async listenForConnections(listeningClient: RedisClient) {
     const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
     while (!this.abortController.signal.aborted) {
-      // TODO: if client.quit() is called, will throw an error? if so handle gracefully
+      // TODO: if client.close() is called, will throw an error? if so handle gracefully
       const connectionRequests = await listeningClient.xRead(
         { key: connectionStreamKey, id: '0-0' },
         {
           BLOCK: 1000, // wait for 1 second for new messages to allow abort signal to be checked
         }
       );
-      if (!connectionRequests || connectionRequests.length === 0) {
+      if (!connectionRequests) {
         continue;
       }
-      for (const request of connectionRequests) {
+      for (const request of connectionRequests as XReadGroupResponseEntry[]) {
         for (const msg of request.messages) {
           const msgId = msg.id;
           const msgPayload = msg.message;
@@ -364,7 +372,7 @@ export class RedisBroker {
             .finally(() => {
               // Close the dedicated client connection after handling the client
               this.perConsumerClients.delete(dedicatedClient);
-              dedicatedClient.quit().catch((error: unknown) => {
+              closeRedisClient(dedicatedClient).catch((error: unknown) => {
                 if (!this.abortController.signal.aborted) {
                   logger.warn(error as Error, `Error closing dedicated client connection`);
                 }
@@ -489,7 +497,7 @@ export class RedisBroker {
       }
 
       // xAdd all msgs at once.
-      let multi = client.multi();
+      const multi = client.multi();
       for (const row of dbResults) {
         const messageId = `${row.sequence_number}-0`;
         const redisMsg = {
@@ -497,7 +505,7 @@ export class RedisBroker {
           path: row.path,
           body: JSON.stringify(row.content),
         };
-        multi = multi.xAdd(clientStreamKey, messageId, redisMsg);
+        multi.xAdd(clientStreamKey, messageId, redisMsg);
       }
       await multi.exec();
 
@@ -560,22 +568,22 @@ export class RedisBroker {
         }
       );
 
-      if (messages && messages.length > 0) {
-        for (const stream of messages) {
+      if (messages) {
+        for (const stream of messages as XReadGroupResponseEntry[]) {
           if (stream.messages.length > 0) {
             const lastReceivedMsgId = stream.messages[stream.messages.length - 1].id;
             logger.debug(
               `Received messages ${stream.messages[0].id} - ${lastReceivedMsgId} from global stream`
             );
-            let multi = client.multi();
+            const multi = client.multi();
             for (const { id, message } of stream.messages) {
               // Filter messages based on message path
               if (selectedPaths === '*' || selectedPaths.includes(message.path as MessagePath)) {
-                multi = multi.xAdd(clientStreamKey, id, message);
+                multi.xAdd(clientStreamKey, id, message);
               }
             }
             // Acknowledge message for this consumer group
-            multi = multi.xAck(this.globalStreamKey, groupKey, lastReceivedMsgId);
+            multi.xAck(this.globalStreamKey, groupKey, lastReceivedMsgId);
             await multi.exec();
             lastQueriedSequenceNumber = lastReceivedMsgId;
           }
@@ -685,66 +693,73 @@ export class RedisBroker {
    * oldest message in the global stream that has been acknowledged by all consumer groups and trims
    * the stream to that message.
    */
-  async trimGlobalStream() {
+  async trimGlobalStream(): Promise<
+    | { result: 'no_stream_exists' }
+    | { result: 'trimmed_minid'; id: number }
+    | { result: 'trimmed_maxlen' }
+    | { result: 'aborted' }
+  > {
+    // Use an optimistic redis transaction to trim the global stream in order to prevent a race-condition
+    // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
+    // messages.
+    // Create an isolated client for the WATCH transaction (required for atomic WATCH + MULTI/EXEC)
+    const isolatedClient = this.client.duplicate();
     try {
-      // Use an optimistic redis transaction to trim the global stream in order to prevent a race-condition
-      // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
-      // messages.
-      return await this.client.executeIsolated(async isolatedClient => {
-        // Watch the global stream group version key to ensure that this trim operation is aborted if
-        // any new consumer groups are added while we're trimming.
-        await isolatedClient.watch(this.globalStreamGroupVersionKey);
+      await isolatedClient.connect();
 
-        let groups: XInfoGroupsResponse;
-        try {
-          groups = await isolatedClient.xInfoGroups(this.globalStreamKey);
-        } catch (error) {
-          if ((error as Error).message?.includes('ERR no such key')) {
-            // Global stream doesn't exist yet so nothing to trim
-            this.logger.info(`Trim performed when global stream doesn't exist yet`);
-            return { result: 'no_stream_exists' } as const;
-          } else {
-            throw error;
-          }
-        }
+      // Watch the global stream group version key to ensure that this trim operation is aborted if
+      // any new consumer groups are added while we're trimming.
+      await isolatedClient.watch(this.globalStreamGroupVersionKey);
 
-        if (this._testHooks) {
-          for (const testFn of this._testHooks.onTrimGlobalStreamGetGroups) {
-            await testFn();
-          }
-        }
-
-        let minDeliveredId: number | null = null;
-        for (const group of groups) {
-          const lastDeliveredID = parseInt(group.lastDeliveredId.split('-')[0]);
-          if (minDeliveredId === null || lastDeliveredID < minDeliveredId) {
-            minDeliveredId = lastDeliveredID;
-          }
-        }
-
-        if (minDeliveredId) {
-          this.logger.info(`Trimming global stream to min delivered ID ${minDeliveredId}`);
-          // All entries that have an ID lower than minDeliveredId will be evicted
-          await isolatedClient
-            .multi()
-            .xTrim(this.globalStreamKey, 'MINID', minDeliveredId, {
-              strategyModifier: '=', // '~'
-            })
-            .exec();
-          return { result: 'trimmed_minid', id: minDeliveredId } as const;
+      let groups: XInfoGroupsResponse;
+      try {
+        groups = await isolatedClient.xInfoGroups(this.globalStreamKey);
+      } catch (error) {
+        if ((error as Error).message?.includes('ERR no such key')) {
+          // Global stream doesn't exist yet so nothing to trim
+          this.logger.info(`Trim performed when global stream doesn't exist yet`);
+          return { result: 'no_stream_exists' } as const;
         } else {
-          this.logger.info(`No groups are active, trimming global stream to the last message`);
-          // No groups are active, so we can trim the stream to 1, we keep the last message
-          // so the ingestion code can still read the last message ID.
-          await isolatedClient
-            .multi()
-            .xTrim(this.globalStreamKey, 'MAXLEN', 1, {
-              strategyModifier: '=', // '~'
-            })
-            .exec();
-          return { result: 'trimmed_maxlen' } as const;
+          throw error;
         }
-      });
+      }
+
+      if (this._testHooks) {
+        for (const testFn of this._testHooks.onTrimGlobalStreamGetGroups) {
+          await testFn();
+        }
+      }
+
+      let minDeliveredId: number | null = null;
+      for (const group of groups) {
+        const lastDeliveredID = parseInt(String(group['last-delivered-id']).split('-')[0]);
+        if (minDeliveredId === null || lastDeliveredID < minDeliveredId) {
+          minDeliveredId = lastDeliveredID;
+        }
+      }
+
+      if (minDeliveredId) {
+        this.logger.info(`Trimming global stream to min delivered ID ${minDeliveredId}`);
+        // All entries that have an ID lower than minDeliveredId will be evicted
+        await isolatedClient
+          .multi()
+          .xTrim(this.globalStreamKey, 'MINID', minDeliveredId, {
+            strategyModifier: '=', // '~'
+          })
+          .exec();
+        return { result: 'trimmed_minid', id: minDeliveredId } as const;
+      } else {
+        this.logger.info(`No groups are active, trimming global stream to the last message`);
+        // No groups are active, so we can trim the stream to 1, we keep the last message
+        // so the ingestion code can still read the last message ID.
+        await isolatedClient
+          .multi()
+          .xTrim(this.globalStreamKey, 'MAXLEN', 1, {
+            strategyModifier: '=', // '~'
+          })
+          .exec();
+        return { result: 'trimmed_maxlen' } as const;
+      }
     } catch (error) {
       if (error instanceof WatchError) {
         // The transaction aborted because a consumer group was added while we were trimming
@@ -754,6 +769,8 @@ export class RedisBroker {
         this.logger.error(error as Error, 'Error trimming global stream');
         throw error;
       }
+    } finally {
+      destroyRedisClient(isolatedClient);
     }
   }
 

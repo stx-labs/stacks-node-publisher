@@ -15,7 +15,6 @@ import {
   testWithFailCb,
   withTimeout,
 } from './utils';
-import { once } from 'node:events';
 import { Message } from '../../client/src/messages';
 
 describe('Redis interrupts', () => {
@@ -50,15 +49,6 @@ describe('Redis interrupts', () => {
     await redisBroker.close();
   });
 
-  beforeEach(async () => {
-    await redisDockerContainer.restart();
-    await Promise.all([
-      once(redisBroker.client, 'ready'),
-      once(redisBroker.ingestionClient, 'ready'),
-      once(redisBroker.listeningClient, 'ready'),
-    ]);
-  });
-
   test('Redis-broker connects without waiting for ready', async () => {
     const broker = new RedisBroker({
       redisUrl: ENV.REDIS_URL,
@@ -79,12 +69,15 @@ describe('Redis interrupts', () => {
 
   test('events-observer POST success when redis unavailable', async () => {
     await redisDockerContainer.stop();
+
     const testEventBody = { test: 'redis_stopped' };
     const postEventResult = await sendTestEvent(eventServer, testEventBody);
     expect(postEventResult.status).toBe(200);
     const lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
     expect(lastDbMsg.content).toEqual(testEventBody);
+
+    await redisDockerContainer.start();
   });
 
   test('client connect succeeds once redis is available', async () => {

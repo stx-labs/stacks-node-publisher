@@ -94,7 +94,7 @@ describe('Prune tests', () => {
       });
       // Expect the trim to be aborted because a new consumer was added
       trimResult = await redisBroker.trimGlobalStream();
-      expect(trimResult.result).toBe('aborted');
+      expect(trimResult?.result).toBe('aborted');
     });
   });
 });

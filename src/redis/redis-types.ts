@@ -29,3 +29,12 @@ async function xInfoGroupsType() {
   return await xInfoGroupsFn(null as any);
 }
 export type XInfoGroupsResponse = Awaited<ReturnType<typeof xInfoGroupsType>>;
+
+/** Type for xRead/xReadGroup response entries */
+export type XReadGroupResponseEntry = {
+  name: string;
+  messages: { id: string; message: Record<string, string> }[];
+};
+
+/** Type for stream entry (first-entry/last-entry in xInfoStream response) */
+export type XInfoStreamEntry = { id: string; message: Record<string, string> } | null;

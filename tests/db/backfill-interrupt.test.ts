@@ -12,7 +12,7 @@ import {
   testWithFailCb,
   withTimeout,
 } from './utils';
-import { ClientKillFilters } from '@redis/client/dist/lib/commands/CLIENT_KILL';
+import { CLIENT_KILL_FILTERS } from '@redis/client/dist/lib/commands/CLIENT_KILL';
 import * as assert from 'node:assert';
 import { timeout, waiter } from '@hirosystems/api-toolkit';
 import { Message } from '../../client/src/messages';
@@ -300,7 +300,7 @@ describe('Backfill tests', () => {
         try {
           const clientRedisConnectionID = await client.client.clientId();
           const clientKillCount = await redisBroker.client.clientKill({
-            filter: ClientKillFilters.ID,
+            filter: CLIENT_KILL_FILTERS.ID,
             id: clientRedisConnectionID,
           });
           expect(clientKillCount).toBe(1);
@@ -398,7 +398,7 @@ describe('Backfill tests', () => {
         assert(perConsumerClient);
         const perConsumerClientRedisConnectionID = await perConsumerClient.clientId();
         const clientKillCount = await redisBroker.client.clientKill({
-          filter: ClientKillFilters.ID,
+          filter: CLIENT_KILL_FILTERS.ID,
           id: perConsumerClientRedisConnectionID,
         });
         expect(clientKillCount).toBe(1);
@@ -506,7 +506,7 @@ describe('Backfill tests', () => {
         await Promise.all(
           redisBrokerGlobalClientIds.map(async clientId => {
             const clientKillCount = await client.client.clientKill({
-              filter: ClientKillFilters.ID,
+              filter: CLIENT_KILL_FILTERS.ID,
               id: clientId,
             });
             expect(clientKillCount).toBe(1);

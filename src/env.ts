@@ -52,6 +52,8 @@ const schema = Type.Object({
   MAX_IDLE_TIME_MS: Type.Integer({ default: 60_000 }),
   /** Max number of messages that a consumer stream can lag behind compared to the last global msg before it's considered slow and pruned. */
   MAX_MSG_LAG: Type.Integer({ default: 2000 }),
+  /** Interval (ms) for running Redis cleanup tasks (trimming global stream and pruning idle clients). */
+  CLEANUP_INTERVAL_MS: Type.Integer({ default: 60_000 }),
 });
 type Env = Static<typeof schema>;
 

@@ -16,6 +16,10 @@ import { EventEmitter } from 'node:events';
 import { SelectedMessagePaths } from '../../client/src';
 import { MessagePath } from '../../client/src/messages';
 
+/**
+ * A Stacks message to be added to the Redis stream. These messages come from the Stacks node
+ * and are added to the Redis stream for consumption by clients.
+ */
 type StacksMessage = {
   timestamp: string;
   sequenceNumber: string;
@@ -23,6 +27,17 @@ type StacksMessage = {
   eventBody: string;
 };
 
+/**
+ * A Redis broker for the Stacks message stream. This broker is responsible for adding messages
+ * to the Redis stream and for consuming messages from the Redis stream.
+ *
+ * It uses three Redis clients:
+ * - `client`: the primary client for the Stacks message stream.
+ * - `ingestionClient`: a client for ingesting messages into the Redis stream.
+ * - `listeningClient`: a client for listening for new connections and serving clients.
+ *
+ * It also uses a map of per-consumer clients to serve each client individually.
+ */
 export class RedisBroker {
   client: RedisClient;
   ingestionClient: RedisClient;
@@ -35,6 +50,8 @@ export class RedisBroker {
 
   readonly abortController = new AbortController();
   readonly db: PgStore;
+
+  private cleanupIntervalTimer: NodeJS.Timeout | null = null;
 
   readonly events = new EventEmitter<{
     idleConsumerPruned: [{ clientId: string }];
@@ -163,6 +180,10 @@ export class RedisBroker {
 
   async close() {
     this.abortController.abort();
+    if (this.cleanupIntervalTimer) {
+      clearInterval(this.cleanupIntervalTimer);
+      this.cleanupIntervalTimer = null;
+    }
     await closeRedisClient(this.client).catch((error: unknown) => {
       if (!(error instanceof ClientClosedError)) {
         this.logger.debug(error, 'Error closing primary redis client connection');
@@ -189,6 +210,11 @@ export class RedisBroker {
     );
   }
 
+  /**
+   * Add a Stacks message to the Redis stream. This message comes from the Stacks node and is added
+   * to the Redis stream for consumption by clients.
+   * @param args - The Stacks message to add to the Redis stream.
+   */
   public async addStacksMessage(args: StacksMessage) {
     try {
       if (this._testHooks) {
@@ -196,13 +222,13 @@ export class RedisBroker {
           await cb(args.sequenceNumber);
         }
       }
-      await this.handleMsg(args);
+      await this.handleStacksCoreMessage(args);
     } catch (error) {
       this.logger.error(error, 'Failed to add message to Redis');
     }
   }
 
-  private async handleMsg(args: StacksMessage) {
+  private async handleStacksCoreMessage(args: StacksMessage) {
     // Redis stream message IDs are <millisecondsTime>-<sequenceNumber>.
     // However, we don't fully trust our timestamp to always increase monotonically (e.g. NTP glitches),
     // so we'll just use the sequence number as the timestamp.
@@ -272,18 +298,32 @@ export class RedisBroker {
         throw error;
       }
     }
+  }
 
-    // TODO: these should be debounced or called on some interval or theshold, not on every message.
-    // Consider:
-    // - create a dedicated redis client used for pruning.
-    // - run this on an configurable interval.
-    // - keep track in nodejs memory of how many messages have been added since the last prune,
-    //   and if that count exceeds a threshold then run the prune (faster than the interval).
-    await this.trimGlobalStream();
-    await this.pruneIdleClients();
+  /**
+   * Run cleanup tasks: trim the global stream and prune idle clients.
+   * This is called periodically by the cleanup interval timer.
+   */
+  private async runCleanupTasks() {
+    try {
+      await this.trimGlobalStream();
+      await this.pruneIdleClients();
+    } catch (error) {
+      if (!this.abortController.signal.aborted) {
+        this.logger.error(error as Error, 'Error running cleanup tasks');
+      }
+    }
   }
 
   async listenForConnections(listeningClient: RedisClient) {
+    // Start periodic cleanup interval for trimming global stream and pruning idle clients
+    if (!this.cleanupIntervalTimer) {
+      this.cleanupIntervalTimer = setInterval(() => {
+        void this.runCleanupTasks();
+      }, ENV.CLEANUP_INTERVAL_MS);
+      this.logger.info(`Started cleanup interval timer with period ${ENV.CLEANUP_INTERVAL_MS}ms`);
+    }
+
     const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
     while (!this.abortController.signal.aborted) {
       // TODO: if client.close() is called, will throw an error? if so handle gracefully
@@ -330,7 +370,7 @@ export class RedisBroker {
 
           // Determine the starting message sequence number for this client by resolving its
           // starting position.
-          const startSequenceNumber = await this.resolveStartMessageSequenceNumber(
+          const startSequenceNumber = await this.resolveClientStartMessageSequenceNumber(
             { lastIndexBlockHash, lastBlockHeight, lastMessageId },
             logger
           );
@@ -625,7 +665,7 @@ export class RedisBroker {
    * @param logger - The logger to use for logging
    * @returns The starting message ID
    */
-  private async resolveStartMessageSequenceNumber(
+  private async resolveClientStartMessageSequenceNumber(
     startingPosition: {
       lastIndexBlockHash: string;
       lastBlockHeight: string;

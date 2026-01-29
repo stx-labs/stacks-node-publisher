@@ -150,13 +150,9 @@ export async function createTestClient(
 }
 
 export async function redisFlushAllWithPrefix(prefix: string, client: RedisClient) {
-  try {
-    const keys = await client.keys(`${prefix}*`);
-    if (keys.length > 0) {
-      await client.del(keys);
-    }
-  } catch (error) {
-    console.error('Error flushing test Redis with prefix', prefix, error);
+  const keys = await client.keys(`${prefix}*`);
+  if (keys.length > 0) {
+    await client.del(keys);
   }
 }
 

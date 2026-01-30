@@ -54,9 +54,11 @@ export class RedisBroker {
   private cleanupIntervalTimer: NodeJS.Timeout | null = null;
 
   readonly events = new EventEmitter<{
+    /** Emitted when a consumer is pruned due to being idle (not consuming) for too long */
     idleConsumerPruned: [{ clientId: string }];
-    laggingConsumerPruned: [{ clientId: string }];
+    /** Emitted when a consumer falls behind MAX_MSG_LAG and is demoted from live streaming to postgres backfill */
     consumerDemotedToBackfill: [{ clientId: string; lag: number }];
+    /** Emitted when a consumer catches up with the global stream and is promoted to live streaming */
     consumerPromotedToLiveStream: [{ clientId: string }];
     perConsumerClientCreated: [{ clientId: string }];
     ingestionMsgGapDetected: [];
@@ -874,15 +876,22 @@ export class RedisBroker {
   }
 
   /**
-   * Clean up idle/offline clients. Detect slow clients which are not consuming fast enough to keep
-   * up with the global stream, otherwise the global stream will continue to grow and OOM redis.
+   * Clean up idle/offline clients. This function handles two scenarios:
+   *
+   * 1. **Idle consumers on the global stream**: If a consumer hasn't interacted with Redis for
+   *    MAX_IDLE_TIME_MS, it's considered dead/offline and is pruned. This frees up resources and
+   *    allows the global stream to be trimmed.
+   *
+   * 2. **Dangling client streams**: Client streams with no active consumers are cleaned up.
+   *
+   * Note: Slow clients (those falling behind on message consumption) are NOT pruned here.
+   * Instead, they self-demote to postgres backfill mode via the streamMessages() function.
+   * This allows for graceful degradation without losing the client's stream state.
    */
   async pruneIdleClients() {
     const fullStreamInfo = await xInfoStreamFull(this.client, this.globalStreamKey);
-    const lastEntryID = fullStreamInfo.lastGeneratedId
-      ? parseInt(fullStreamInfo.lastGeneratedId.split('-')[0])
-      : null;
 
+    // Part 1: Check for idle consumers on the global stream
     for (const group of fullStreamInfo.groups) {
       if (group.consumers.length > 1) {
         this.logger.error(
@@ -890,49 +899,40 @@ export class RedisBroker {
         );
       }
       for (const consumer of group.consumers) {
-        // TODO: this last ID comparison assumes consecutive integers for the message IDs, which may not always be the case.
-        const msgsBehind = lastEntryID
-          ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
-          : 0;
         const idleMs = Date.now() - consumer.seenTime;
         const isIdle = idleMs > ENV.MAX_IDLE_TIME_MS;
-        const isTooSlow = msgsBehind > ENV.MAX_MSG_LAG;
-        if (isIdle || isTooSlow) {
+
+        if (isIdle) {
           const clientId = consumer.name.split(':').at(-1) ?? '';
           const clientStreamKey = this.getClientStreamKey(clientId);
           this.logger.info(
-            `Detected idle or slow consumer group, client: ${clientId}, idle ms: ${idleMs}, msgs behind: ${msgsBehind}`
+            `Detected idle consumer group on global stream, client: ${clientId}, idle ms: ${idleMs}`
           );
+
+          // Destroy both the global stream consumer group and the client stream.
+          // The client will need to reconnect and re-initialize.
           await this.client
             .multi()
-            // When the group is destroyed here, the live-streaming loop for this client is notified
-            // via NOGROUP error on xReadGroup and exits.
             .xGroupDestroy(this.globalStreamKey, group.name)
-            // Destroy the client stream, if there's still an online client then
-            // they will be notified via NOGROUP error on xReadGroup and re-init.
             .del(clientStreamKey)
             .exec()
             .catch((error: unknown) => {
               error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               this.logger.warn(error, `Error while pruning idle client groups`);
             });
-          if (isIdle) {
-            this.events.emit('idleConsumerPruned', { clientId });
-          }
-          if (isTooSlow) {
-            this.events.emit('laggingConsumerPruned', { clientId });
-          }
+
+          this.events.emit('idleConsumerPruned', { clientId });
         }
       }
     }
 
-    // Check for idle client streams and clean them up
+    // Part 2: Check for dangling/idle client streams
     const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
     const clientStreamFullInfos = await xInfoStreamsFull(this.client, clientStreamKeys);
 
     for (const streamInfo of clientStreamFullInfos) {
       if (!streamInfo.response) {
-        // no stream exists for this key (i.e. stream was deleted in between fetching the list of keys then info)
+        // Stream was deleted between fetching the list of keys and getting info
         continue;
       }
 
@@ -941,17 +941,21 @@ export class RedisBroker {
         response: { groups },
       } = streamInfo;
 
+      // Check for dangling streams with no consumers
       if (groups.length === 0 || groups[0].consumers.length === 0) {
-        // Found a "dangling" client stream with no consumers, destroy the group and delete the stream
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
         await this.client.del(clientStreamKey).catch((error: unknown) => {
           error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-          this.logger.warn(error, `Error while pruning idle client stream`);
+          this.logger.warn(error, `Error while pruning dangling client stream`);
         });
+        continue;
       }
+
       if (groups.length > 1) {
         this.logger.error(`Multiple groups for client stream ${clientStreamKey}: ${groups.length}`);
       }
+
+      // Check for idle consumers on the client stream
       for (const group of groups) {
         if (group.consumers.length > 1) {
           this.logger.error(
@@ -960,32 +964,24 @@ export class RedisBroker {
         }
         for (const consumer of group.consumers) {
           const idleMs = Date.now() - consumer.seenTime;
+
           if (idleMs > ENV.MAX_IDLE_TIME_MS) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientGlobalStreamGroupKey(clientId);
-            const globalStreamGroup = fullStreamInfo.groups.find(g => g.name === groupId);
-            const globalStreamMsgsBehind =
-              lastEntryID && globalStreamGroup
-                ? lastEntryID - parseInt(globalStreamGroup.lastDeliveredId.split('-')[0])
-                : 0;
-            const clientStreamMsgsBehind = lastEntryID
-              ? lastEntryID - parseInt(group.lastDeliveredId.split('-')[0])
-              : 0;
 
-            this.logger.info(
-              `Detected idle client stream ${clientId}, idle ms: ${idleMs}, msgs behind: global=${globalStreamMsgsBehind}, client=${clientStreamMsgsBehind}`
-            );
+            this.logger.info(`Detected idle client stream ${clientId}, idle ms: ${idleMs}`);
+
+            // Destroy the global stream consumer group (if it exists) and the client stream
             await this.client
               .multi()
-              // Destroy the global stream consumer group for this client
               .xGroupDestroy(this.globalStreamKey, groupId)
-              // Destroy the client stream group and delete the client stream
               .del(clientStreamKey)
               .exec()
               .catch((error: unknown) => {
                 error = unwrapRedisMultiErrorReply(error as Error) ?? error;
                 this.logger.warn(error, `Error while pruning idle client stream`);
               });
+
             this.events.emit('idleConsumerPruned', { clientId });
           }
         }

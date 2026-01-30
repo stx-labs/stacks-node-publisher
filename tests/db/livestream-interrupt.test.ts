@@ -257,35 +257,28 @@ describe('Live-stream tests', () => {
       expect(globalStreamGroupInfo).toBeTruthy();
       expect(globalStreamGroupInfo.length).toBeGreaterThan(0);
 
-      // The client redis stream group should be pruned after the MAX_MSG_LAG threshold is hit
-      const clientConsumerGroupDestroyed = once(client.events, 'redisConsumerGroupDestroyed');
+      // The server should demote the client to backfill after the MAX_MSG_LAG threshold is hit
+      const clientDemoted = once(redisBroker.events, 'consumerDemotedToBackfill');
 
-      // The server should prune the client consumer group after the MAX_MSG_LAG threshold is hit
-      const clientPruned = once(redisBroker.events, 'laggingConsumerPruned');
-
-      // Queue up over MAX_MSG_LAG messages to force the client to be pruned
+      // Queue up over MAX_MSG_LAG messages to force the client to be demoted
       for (let i = 0; i < ENV.MAX_MSG_LAG * 3; i++) {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
 
-      await clientPruned;
+      await clientDemoted;
 
       // Remove the client msg ingestion sleep to allow it to catch up
       onLivestreamHit = waiter();
 
-      await clientConsumerGroupDestroyed;
-
-      // The client consumer redis stream should be pruned
+      // The client consumer redis stream should still exist (demotion preserves it)
       clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
+      expect(clientStreamExists).toBe(1);
 
-      // The client consumer group on the global stream should be pruned
+      // The client consumer group on the global stream should be destroyed (demotion destroys it)
       const globalStreamGroupExists = await redisBroker.client
         .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
         .then(
-          () => {
-            throw new Error('Expected xInfoConsumers to reject');
-          },
+          () => true,
           (error: Error) => {
             if (error?.message.includes('NOGROUP')) {
               return false;
@@ -296,7 +289,11 @@ describe('Live-stream tests', () => {
         );
       expect(globalStreamGroupExists).toBe(false);
 
-      // Ensure client is able to reconnect and continue processing messages
+      // Wait for the client to be re-promoted to live streaming after catching up via backfill
+      const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
+      await clientPromoted;
+
+      // Ensure client is able to continue processing messages (it doesn't need to reconnect)
       const latestDbMsg = await db.getLastMessage();
       await new Promise<void>(resolve => {
         msgEvents.on('msg', (id: string) => {

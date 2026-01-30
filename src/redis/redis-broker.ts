@@ -154,6 +154,16 @@ export class RedisBroker {
           `Connected to Redis, client ID: ${primaryClientID}, ingestion client ID: ${ingestionClientID}, listening client ID: ${listeningClientID}`
         );
         this.events.emit('redisClientsConnected');
+
+        // Start periodic cleanup interval for trimming global stream and pruning idle clients
+        if (!this.cleanupIntervalTimer) {
+          this.cleanupIntervalTimer = setInterval(() => {
+            void this.runCleanupTasks();
+          }, ENV.CLEANUP_INTERVAL_MS);
+          this.logger.info(
+            `Started cleanup interval timer with period ${ENV.CLEANUP_INTERVAL_MS}ms`
+          );
+        }
       } catch (err) {
         this.logger.error(err as Error, 'Fatal error connecting to Redis');
         throw err;
@@ -322,6 +332,9 @@ export class RedisBroker {
    * This is called periodically by the cleanup interval timer.
    */
   private async runCleanupTasks() {
+    if (this.abortController.signal.aborted) {
+      return;
+    }
     try {
       await this.trimGlobalStream();
       await this.pruneIdleClients();
@@ -333,14 +346,6 @@ export class RedisBroker {
   }
 
   async listenForConnections(listeningClient: RedisClient) {
-    // Start periodic cleanup interval for trimming global stream and pruning idle clients
-    if (!this.cleanupIntervalTimer) {
-      this.cleanupIntervalTimer = setInterval(() => {
-        void this.runCleanupTasks();
-      }, ENV.CLEANUP_INTERVAL_MS);
-      this.logger.info(`Started cleanup interval timer with period ${ENV.CLEANUP_INTERVAL_MS}ms`);
-    }
-
     const connectionStreamKey = this.redisStreamKeyPrefix + 'connection_stream';
     while (!this.abortController.signal.aborted) {
       // TODO: if client.close() is called, will throw an error? if so handle gracefully

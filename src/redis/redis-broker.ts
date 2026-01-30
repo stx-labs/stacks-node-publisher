@@ -28,6 +28,19 @@ type StacksMessage = {
 };
 
 /**
+ * The result of a global stream trim operation.
+ * - `no_stream_exists`: the global stream does not exist.
+ * - `trimmed_minid`: the global stream was trimmed to the minimum ID.
+ * - `trimmed_maxlen`: the global stream was trimmed to the maximum length.
+ * - `aborted`: the trim operation was aborted.
+ */
+type GlobalStreamTrimResult =
+  | { result: 'no_stream_exists' }
+  | { result: 'trimmed_minid'; id: number }
+  | { result: 'trimmed_maxlen' }
+  | { result: 'aborted' };
+
+/**
  * A Redis broker for the Stacks message stream. This broker is responsible for adding messages
  * to the Redis stream and for consuming messages from the Redis stream.
  *
@@ -226,13 +239,13 @@ export class RedisBroker {
           await cb(args.sequenceNumber);
         }
       }
-      await this.handleStacksCoreMessage(args);
+      await this.addStacksMessageInternal(args);
     } catch (error) {
       this.logger.error(error, 'Failed to add message to Redis');
     }
   }
 
-  private async handleStacksCoreMessage(args: StacksMessage) {
+  private async addStacksMessageInternal(args: StacksMessage) {
     // Redis stream message IDs are <millisecondsTime>-<sequenceNumber>.
     // However, we don't fully trust our timestamp to always increase monotonically (e.g. NTP glitches),
     // so we'll just use the sequence number as the timestamp.
@@ -794,12 +807,7 @@ export class RedisBroker {
    * oldest message in the global stream that has been acknowledged by all consumer groups and trims
    * the stream to that message.
    */
-  async trimGlobalStream(): Promise<
-    | { result: 'no_stream_exists' }
-    | { result: 'trimmed_minid'; id: number }
-    | { result: 'trimmed_maxlen' }
-    | { result: 'aborted' }
-  > {
+  async trimGlobalStream(): Promise<GlobalStreamTrimResult> {
     // Use an optimistic redis transaction to trim the global stream in order to prevent a race-condition
     // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
     // messages.

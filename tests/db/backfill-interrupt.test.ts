@@ -251,11 +251,13 @@ describe('Backfill tests', () => {
       const clientStreamStillExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamStillExists).toBe(1);
 
+      // Set up promotion listener BEFORE allowing client to continue (to avoid race condition)
+      const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
+
       // Remove the client msg ingestion sleep to allow it to catch up
       backfillHit = waiter();
 
       // Wait for the client to be promoted to live streaming after catching up
-      const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
       await clientPromoted;
 
       // Now the consumer group should exist on the global stream

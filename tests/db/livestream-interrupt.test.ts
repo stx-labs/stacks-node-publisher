@@ -267,9 +267,6 @@ describe('Live-stream tests', () => {
 
       await clientDemoted;
 
-      // Remove the client msg ingestion sleep to allow it to catch up
-      onLivestreamHit = waiter();
-
       // The client consumer redis stream should still exist (demotion preserves it)
       clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(1);
@@ -289,8 +286,13 @@ describe('Live-stream tests', () => {
         );
       expect(globalStreamGroupExists).toBe(false);
 
-      // Wait for the client to be re-promoted to live streaming after catching up via backfill
+      // Set up promotion listener BEFORE allowing client to continue (to avoid race condition)
       const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
+
+      // Remove the client msg ingestion sleep to allow it to catch up
+      onLivestreamHit = waiter();
+
+      // Wait for the client to be re-promoted to live streaming after catching up via backfill
       await clientPromoted;
 
       // Ensure client is able to continue processing messages (it doesn't need to reconnect)

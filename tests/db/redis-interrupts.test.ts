@@ -235,10 +235,10 @@ describe('Redis interrupts', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The original client consumer group on the global stream should be pruned
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // The original client consumer group on the chain tip stream should be pruned
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => {
             throw new Error('Expected xInfoConsumers to reject');
@@ -251,7 +251,7 @@ describe('Redis interrupts', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();
@@ -359,10 +359,10 @@ describe('Redis interrupts', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The original client consumer group on the global stream should be pruned
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // The original client consumer group on the chain tip stream should be pruned
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => {
             throw new Error('Expected xInfoConsumers to reject');
@@ -375,7 +375,7 @@ describe('Redis interrupts', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();

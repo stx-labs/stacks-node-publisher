@@ -87,14 +87,14 @@ describe('Backfill tests', () => {
       expect(clientStreamInfo).toBeTruthy();
       expect(clientStreamInfo.length).toBeGreaterThan(0);
 
-      // The client consumer group on the global stream should still be alive
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(client.clientId);
-      const globalStreamGroupInfo = await redisBroker.client.xInfoConsumers(
-        redisBroker.globalStreamKey,
+      // The client consumer group on the chain tip stream should still be alive
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(client.clientId);
+      const chainTipStreamGroupInfo = await redisBroker.client.xInfoConsumers(
+        redisBroker.chainTipStreamKey,
         clientGroupKey
       );
-      expect(globalStreamGroupInfo).toBeTruthy();
-      expect(globalStreamGroupInfo.length).toBeGreaterThan(0);
+      expect(chainTipStreamGroupInfo).toBeTruthy();
+      expect(chainTipStreamGroupInfo.length).toBeGreaterThan(0);
 
       // The client redis stream group should be pruned after the MAX_IDLE_TIME_MS
       const clientConsumerGroupDestroyed = withTimeout(
@@ -124,9 +124,9 @@ describe('Backfill tests', () => {
       clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The client consumer group on the global stream should be pruned
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // The client consumer group on the chain tip stream should be pruned
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => {
             throw new Error('Expected xInfoConsumers to reject');
@@ -139,7 +139,7 @@ describe('Backfill tests', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
@@ -173,7 +173,7 @@ describe('Backfill tests', () => {
     // stream. This means:
     // 1. The client cannot be "demoted" during backfill (it's not promoted yet)
     // 2. MAX_MSG_LAG only applies once the client catches up and transitions to live streaming
-    // 3. The global stream can be trimmed freely during client backfill
+    // 3. The chain tip stream can be trimmed freely during client backfill
     await testWithFailCb(async fail => {
       const lastDbMsg = await db.getLastMessage();
 
@@ -222,11 +222,11 @@ describe('Backfill tests', () => {
       expect(clientStreamInfo).toBeTruthy();
       expect(clientStreamInfo.length).toBeGreaterThan(0);
 
-      // During backfill, there should be NO consumer group on the global stream
-      // (consumer group is only created when client catches up with global stream)
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(client.clientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // During backfill, there should be NO consumer group on the chain tip stream
+      // (consumer group is only created when client catches up with chain tip stream)
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(client.clientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => true,
           (error: Error) => {
@@ -237,7 +237,7 @@ describe('Backfill tests', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       // Queue up over MAX_MSG_LAG messages - this should NOT affect the backfilling client
       for (let i = 0; i < ENV.MAX_MSG_LAG * 3; i++) {
@@ -260,9 +260,9 @@ describe('Backfill tests', () => {
       // Wait for the client to be promoted to live streaming after catching up
       await clientPromoted;
 
-      // Now the consumer group should exist on the global stream
-      const globalStreamGroupExistsAfterPromotion = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // Now the consumer group should exist on the chain tip stream
+      const chainTipStreamGroupExistsAfterPromotion = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => true,
           (error: Error) => {
@@ -273,7 +273,7 @@ describe('Backfill tests', () => {
             }
           }
         );
-      expect(globalStreamGroupExistsAfterPromotion).toBe(true);
+      expect(chainTipStreamGroupExistsAfterPromotion).toBe(true);
 
       // Ensure client continues processing messages
       const latestDbMsg = await db.getLastMessage();
@@ -363,10 +363,10 @@ describe('Backfill tests', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The client consumer group on the global stream should be pruned
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // The client consumer group on the chain tip stream should be pruned
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => {
             throw new Error('Expected xInfoConsumers to reject');
@@ -379,7 +379,7 @@ describe('Backfill tests', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();
@@ -469,10 +469,10 @@ describe('Backfill tests', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The client consumer group on the global stream should be pruned
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // The client consumer group on the chain tip stream should be pruned
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => {
             throw new Error('Expected xInfoConsumers to reject');
@@ -485,7 +485,7 @@ describe('Backfill tests', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();
@@ -590,14 +590,14 @@ describe('Backfill tests', () => {
       expect(clientStreamInfo).toBeTruthy();
       expect(clientStreamInfo.length).toBe(0);
 
-      // The client consumer group on the global stream should still be alive
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupInfo = await redisBroker.client.xInfoConsumers(
-        redisBroker.globalStreamKey,
+      // The client consumer group on the chain tip stream should still be alive
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupInfo = await redisBroker.client.xInfoConsumers(
+        redisBroker.chainTipStreamKey,
         clientGroupKey
       );
-      expect(globalStreamGroupInfo).toBeTruthy();
-      expect(globalStreamGroupInfo.length).toBeGreaterThan(0);
+      expect(chainTipStreamGroupInfo).toBeTruthy();
+      expect(chainTipStreamGroupInfo.length).toBeGreaterThan(0);
 
       await client.stop();
       ENV.reload();
@@ -680,10 +680,10 @@ describe('Backfill tests', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The original client consumer group on the global stream should be pruned
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      // The original client consumer group on the chain tip stream should be pruned
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => {
             throw new Error('Expected xInfoConsumers to reject');
@@ -696,7 +696,7 @@ describe('Backfill tests', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();

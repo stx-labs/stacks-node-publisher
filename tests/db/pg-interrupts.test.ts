@@ -121,7 +121,7 @@ describe('Postgres interrupts', () => {
 
   test('client recovers after pg error during backfilling', async () => {
     // With the new design, the consumer group is created when the client catches up with the
-    // global stream. If postgres fails during backfill, the streamMessages function throws,
+    // chain tip stream. If postgres fails during backfill, the streamMessages function throws,
     // which triggers cleanup and the client reconnects.
     await testWithFailCb(async fail => {
       let lastDbMsg = await db.getLastMessage();
@@ -161,7 +161,7 @@ describe('Postgres interrupts', () => {
         }
       );
 
-      // With the new design, the consumer group on the global stream is created when the client
+      // With the new design, the consumer group on the chain tip stream is created when the client
       // catches up (after first batch). So redisConsumerGroupDestroyed may or may not fire
       // depending on timing. We just wait for the error and recovery.
 
@@ -200,11 +200,11 @@ describe('Postgres interrupts', () => {
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamExists).toBe(0);
 
-      // The original client consumer group on the global stream should not exist
+      // The original client consumer group on the chain tip stream should not exist
       // (either it was never created because the error happened early, or it was cleaned up)
-      const clientGroupKey = redisBroker.getClientGlobalStreamGroupKey(originalClientId);
-      const globalStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.globalStreamKey, clientGroupKey)
+      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
+      const chainTipStreamGroupExists = await redisBroker.client
+        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
         .then(
           () => true,
           (error: Error) => {
@@ -215,7 +215,7 @@ describe('Postgres interrupts', () => {
             }
           }
         );
-      expect(globalStreamGroupExists).toBe(false);
+      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();

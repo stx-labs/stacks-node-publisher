@@ -30,6 +30,7 @@ type StacksMessage = {
 /** Identifies a Stacks client on the Redis broker. */
 type StacksClient = {
   client: RedisClient;
+  appName: string;
   clientId: string;
   selectedPaths: SelectedMessagePaths;
 };
@@ -37,27 +38,36 @@ type StacksClient = {
 /** Identifies an actual Stacks client connection on the Redis broker. */
 type StacksClientConnection = StacksClient & {
   clientStreamKey: string;
-  globalClientGroupKey: string;
-  globalClientConsumerKey: string;
+  chainTipStreamGroupKey: string;
+  chainTipStreamConsumerKey: string;
   lastStreamedSequenceNumber: string;
 };
 
 /**
- * The result of a global stream trim operation.
- * - `no_stream_exists`: the global stream does not exist.
- * - `trimmed_minid`: the global stream was trimmed to the minimum ID.
- * - `trimmed_maxlen`: the global stream was trimmed to the maximum length.
+ * The result of a chain tip stream trim operation.
+ * - `no_stream_exists`: the chain tip stream does not exist.
+ * - `trimmed_minid`: the chain tip stream was trimmed to the minimum ID.
+ * - `trimmed_maxlen`: the chain tip stream was trimmed to the maximum length.
  * - `aborted`: the trim operation was aborted.
  */
-type GlobalStreamTrimResult =
+type ChainTipStreamTrimResult =
   | { result: 'no_stream_exists' }
   | { result: 'trimmed_minid'; id: number }
   | { result: 'trimmed_maxlen' }
   | { result: 'aborted' };
 
 /**
- * A Redis broker for the Stacks message stream. This broker is responsible for adding messages
- * to the Redis stream and for consuming messages from the Redis stream.
+ * A Redis broker for the Stacks message stream. This broker is responsible for adding messages to
+ * the Redis stream and for consuming messages from the Redis stream.
+ *
+ * It uses three types of Redis streams:
+ * - **Chain tip stream**: The primary stream where Stacks node messages are ingested. A consumer
+ *   group is created per client to enable live-streaming from the chain tip.
+ * - **Connection stream**: Receives new client connection requests. Clients write to this stream to
+ *   initiate a connection, and the broker processes these requests.
+ * - **Client streams**: Per-client streams (`client:{clientId}`) where messages are written for
+ *   consumption. Messages are either backfilled from Postgres or forwarded from the chain tip
+ *   stream.
  *
  * It uses three Redis clients:
  * - `client`: the primary client for the Stacks message stream.
@@ -74,7 +84,7 @@ export class RedisBroker {
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
   readonly redisStreamKeyPrefix: string;
-  readonly globalStreamKey: string;
+  readonly chainTipStreamKey: string;
 
   readonly abortController = new AbortController();
   readonly db: PgStore;
@@ -86,7 +96,7 @@ export class RedisBroker {
     idleConsumerPruned: [{ clientId: string }];
     /** Emitted when a consumer falls behind MAX_MSG_LAG and is demoted from live streaming to postgres backfill */
     consumerDemotedToBackfill: [{ clientId: string; lag: number }];
-    /** Emitted when a consumer catches up with the global stream and is promoted to live streaming */
+    /** Emitted when a consumer catches up with the chain tip stream and is promoted to live streaming */
     consumerPromotedToLiveStream: [{ clientId: string }];
     perConsumerClientCreated: [{ clientId: string }];
     ingestionMsgGapDetected: [];
@@ -98,7 +108,7 @@ export class RedisBroker {
     ? {
         onLiveStreamTransition: createTestHook<() => Promise<void>>(),
         onLiveStreamDrained: createTestHook<() => Promise<void>>(),
-        onTrimGlobalStreamGetGroups: createTestHook<() => Promise<void>>(),
+        onTrimChainTipStreamGetGroups: createTestHook<() => Promise<void>>(),
         onPgBackfillLoop: createTestHook<(msgId: string) => Promise<void>>(),
         onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
         onBeforePgBackfillQuery: createTestHook<(msgId: string) => Promise<void>>(),
@@ -112,7 +122,7 @@ export class RedisBroker {
     if (this.redisStreamKeyPrefix !== '' && !this.redisStreamKeyPrefix.endsWith(':')) {
       this.redisStreamKeyPrefix += ':';
     }
-    this.globalStreamKey = this.redisStreamKeyPrefix + 'global_stream';
+    this.chainTipStreamKey = this.redisStreamKeyPrefix + 'global_stream';
 
     this.client = createClient({
       url: args.redisUrl,
@@ -144,8 +154,8 @@ export class RedisBroker {
     );
   }
 
-  get globalStreamGroupVersionKey() {
-    return `${this.globalStreamKey}:group_version`;
+  get chainTipStreamGroupVersionKey() {
+    return `${this.chainTipStreamKey}:group_version`;
   }
 
   connect<TWaitForReady extends boolean = false>(args: {
@@ -170,10 +180,10 @@ export class RedisBroker {
         );
         this.events.emit('redisClientsConnected');
 
-        // Start periodic cleanup interval for trimming global stream and pruning idle clients
+        // Start periodic cleanup interval for trimming chain tip stream and pruning idle clients
         if (!this.cleanupIntervalTimer) {
           this.cleanupIntervalTimer = setInterval(() => {
-            void this.runCleanupTasks();
+            void this.cleanup();
           }, ENV.CLEANUP_INTERVAL_MS);
           this.logger.info(
             `Started cleanup interval timer with period ${ENV.CLEANUP_INTERVAL_MS}ms`
@@ -277,7 +287,7 @@ export class RedisBroker {
     const messageId = `${args.sequenceNumber}-0`;
 
     try {
-      // If redis was unreachable when the last message(s) were added to the global stream,
+      // If redis was unreachable when the last message(s) were added to the chain tip stream,
       // then we need to make sure we don't create msg gaps in the stream. This can be done by
       // checking the last message ID in the stream and making sure it's exactly 1 less than the
       // sequence number of this new message.
@@ -286,11 +296,11 @@ export class RedisBroker {
       // atomic switch from backfilling to live-streaming and backpressure handling. It could
       // also take a while to complete so unclear on what to do when subsequent messages come in.
       //
-      // So instead, we DEL the global stream and all client streams, which triggers a re-initialization
+      // So instead, we DEL the chain tip stream and all client streams, which triggers a re-initialization
       // of all clients so that they backfill the missing msgs from pg. This is simpler but could cause a
       // lot of churn if redis is frequently unreachable and/or unavailable for a long time.
       const streamInfo = await this.ingestionClient
-        .xInfoStream(this.globalStreamKey)
+        .xInfoStream(this.chainTipStreamKey)
         .catch((error: unknown) => {
           if ((error as Error).message?.includes('ERR no such key')) {
             return null;
@@ -310,12 +320,12 @@ export class RedisBroker {
         if (lastEntryId + 1 < parseInt(args.sequenceNumber)) {
           this.events.emit('ingestionMsgGapDetected');
           this.logger.warn(
-            `Detected gap in global stream, lastEntryId=${lastEntryId}, sequenceNumber=${args.sequenceNumber}`
+            `Detected gap in chain tip stream, lastEntryId=${lastEntryId}, sequenceNumber=${args.sequenceNumber}`
           );
-          // Delete the global stream and all client streams.
-          const groups = await this.ingestionClient.xInfoGroups(this.globalStreamKey);
+          // Delete the chain tip stream and all client streams.
+          const groups = await this.ingestionClient.xInfoGroups(this.chainTipStreamKey);
           const multi = this.ingestionClient.multi();
-          multi.del(this.globalStreamKey);
+          multi.del(this.chainTipStreamKey);
           for (const group of groups) {
             const clientStream = this.getClientStreamKey(group.name.split(':').at(-1) ?? '');
             multi.del(clientStream);
@@ -329,7 +339,7 @@ export class RedisBroker {
         path: args.eventPath,
         body: args.eventBody,
       };
-      await this.ingestionClient.xAdd(this.globalStreamKey, messageId, globalRedisMsg);
+      await this.ingestionClient.xAdd(this.chainTipStreamKey, messageId, globalRedisMsg);
     } catch (error) {
       // Ignore error if it's a duplicate message, which could happen if a previous xadd succeeded
       // on the server but failed to send the response back to the client (e.g. network error).
@@ -343,15 +353,15 @@ export class RedisBroker {
   }
 
   /**
-   * Run cleanup tasks: trim the global stream and prune idle clients.
+   * Run cleanup tasks: trim the chain tip stream and prune idle clients.
    * This is called periodically by the cleanup interval timer.
    */
-  private async runCleanupTasks() {
+  private async cleanup() {
     if (this.abortController.signal.aborted) {
       return;
     }
     try {
-      await this.trimGlobalStream();
+      await this.trimChainTipStream();
       await this.pruneIdleClients();
     } catch (error) {
       if (!this.abortController.signal.aborted) {
@@ -417,7 +427,7 @@ export class RedisBroker {
 
           // Serve the client by creating the consumer group and backfilling messages from postgres.
           void this.streamMessagesToClient(
-            { client: dedicatedClient, clientId, selectedPaths },
+            { client: dedicatedClient, appName, clientId, selectedPaths },
             startSequenceNumber,
             logger
           )
@@ -428,12 +438,12 @@ export class RedisBroker {
               } else if (!this.abortController.signal.aborted) {
                 logger.error(error as Error, `Error processing msgs for consumer stream`);
               }
-              const groupKey = this.getClientGlobalStreamGroupKey(clientId);
+              const groupKey = this.getClientChainTipStreamGroupKey(clientId);
               const clientStreamKey = this.getClientStreamKey(clientId);
               await this.client
                 .multi()
-                // Destroy the global stream consumer group for this client
-                .xGroupDestroy(this.globalStreamKey, groupKey)
+                // Destroy the chain tip stream consumer group for this client
+                .xGroupDestroy(this.chainTipStreamKey, groupKey)
                 // Destroy the stream for this client (notifies the client via NOGROUP error on xReadGroup)
                 .del(clientStreamKey)
                 .exec()
@@ -462,17 +472,17 @@ export class RedisBroker {
     return `${this.redisStreamKeyPrefix}client:${clientId}`;
   }
 
-  getClientGlobalStreamGroupKey(clientId: string) {
+  getClientChainTipStreamGroupKey(clientId: string) {
     return `${this.redisStreamKeyPrefix}client_group:${clientId}`;
   }
 
   /**
    * Handles a client connection by backfilling messages from postgres first, then transitioning
-   * to live-streaming from the global stream once caught up. If the client falls behind during
+   * to live-streaming from the chain tip stream once caught up. If the client falls behind during
    * live-streaming, it is demoted back to postgres backfilling until it catches up again.
    *
    * This design ensures:
-   * 1. During backfilling, no consumer group blocks global stream trimming
+   * 1. During backfilling, no consumer group blocks chain tip stream trimming
    * 2. Full historical sync is possible without being pruned for "lagging"
    * 3. Slow clients gracefully degrade to postgres backfill instead of being disconnected
    *
@@ -488,11 +498,12 @@ export class RedisBroker {
     await stacksClient.client.connect();
     const conn: StacksClientConnection = {
       client: stacksClient.client,
+      appName: stacksClient.appName,
       clientId: stacksClient.clientId,
       selectedPaths: stacksClient.selectedPaths,
       clientStreamKey: this.getClientStreamKey(stacksClient.clientId),
-      globalClientGroupKey: this.getClientGlobalStreamGroupKey(stacksClient.clientId),
-      globalClientConsumerKey: `${this.redisStreamKeyPrefix}consumer:${stacksClient.clientId}`,
+      chainTipStreamGroupKey: this.getClientChainTipStreamGroupKey(stacksClient.clientId),
+      chainTipStreamConsumerKey: `${this.redisStreamKeyPrefix}consumer:${stacksClient.clientId}`,
       lastStreamedSequenceNumber: startSequenceNumber,
     };
 
@@ -502,20 +513,25 @@ export class RedisBroker {
       // ═══════════════════════════════════════════════════════════════════════════════
       // PHASE 1: Backfill from Postgres
       // ═══════════════════════════════════════════════════════════════════════════════
-      // No consumer group is created during this phase, so the global stream can be
+      // No consumer group is created during this phase, so the chain tip stream can be
       // trimmed freely without being blocked by this client's position.
-      let globalConsumerGroupCreated = false;
+      logger.info(
+        { appName: stacksClient.appName, clientId: stacksClient.clientId },
+        `Starting postgres backfill for client starting at sequence ${conn.lastStreamedSequenceNumber}`
+      );
+      const { globalConsumerGroupCreated } = await this.backfillClientStreamFromPostgres(
+        conn,
+        logger
+      );
 
-      const backfillResult = await this.backfillClientStreamFromPostgres(conn, logger);
-      globalConsumerGroupCreated = backfillResult.globalConsumerGroupCreated;
-
-      // If consumer group not created yet (global stream didn't exist or was empty during backfill),
+      // If consumer group not created yet (chain tip stream didn't exist or was empty during backfill),
       // create it now at '$' to start receiving new messages
       if (!globalConsumerGroupCreated) {
         logger.info(
-          `Postgres backfill complete. Creating consumer group at '$' (no overlap needed)`
+          { appName: stacksClient.appName, clientId: stacksClient.clientId },
+          `Postgres backfill complete. Creating consumer group at '$' (no overlap needed) for client starting at sequence ${conn.lastStreamedSequenceNumber}`
         );
-        await this.createClientGlobalStreamConsumerGroup(conn);
+        await this.createClientChainTipStreamConsumerGroup(conn);
         this.events.emit('consumerPromotedToLiveStream', { clientId: conn.clientId });
       }
 
@@ -526,50 +542,52 @@ export class RedisBroker {
       }
 
       // ═══════════════════════════════════════════════════════════════════════════════
-      // PHASE 2: Live streaming from global stream
+      // PHASE 2: Live streaming from chain tip stream
       // ═══════════════════════════════════════════════════════════════════════════════
-      // Read from the global stream using the consumer group and write to the client's stream.
+      // Read from the chain tip stream using the consumer group and write to the client's stream.
       // If the client falls behind (exceeds MAX_MSG_LAG), demote back to Phase 1.
       logger.info(
+        { appName: stacksClient.appName, clientId: stacksClient.clientId },
         `Starting live streaming for client at msg ID ${conn.lastStreamedSequenceNumber}`
       );
-      const { demotedToBackfill } = await this.liveStreamClientStreamFromGlobalStream(conn, logger);
+      const { demotedToBackfill } = await this.feedClientStreamFromChainTipStream(conn, logger);
       // If we exited the live streaming loop without being demoted, we're shutting down
       if (!demotedToBackfill) {
         break;
       }
       logger.info(
+        { appName: stacksClient.appName, clientId: stacksClient.clientId },
         `Client demoted to backfill mode, resuming from sequence ${conn.lastStreamedSequenceNumber}`
       );
     }
   }
 
   /**
-   * Creates a consumer group for a client on the global stream.
+   * Creates a consumer group for a client on the chain tip stream.
    * @param conn - The client connection to use for the consumer group.
    * @param startAtSequence - The sequence number to start the consumer group at. If
    * not provided, the consumer group will be created at '$'.
    */
-  private async createClientGlobalStreamConsumerGroup(
+  private async createClientChainTipStreamConsumerGroup(
     conn: StacksClientConnection,
     startAtSequence?: string
   ) {
     await conn.client
       .multi()
       .xGroupCreate(
-        this.globalStreamKey,
-        conn.globalClientGroupKey,
+        this.chainTipStreamKey,
+        conn.chainTipStreamGroupKey,
         startAtSequence ? `${startAtSequence}-0` : '$',
         {
           MKSTREAM: true,
         }
       )
       .xGroupCreateConsumer(
-        this.globalStreamKey,
-        conn.globalClientGroupKey,
-        conn.globalClientConsumerKey
+        this.chainTipStreamKey,
+        conn.chainTipStreamGroupKey,
+        conn.chainTipStreamConsumerKey
       )
-      .incr(this.globalStreamGroupVersionKey)
+      .incr(this.chainTipStreamGroupVersionKey)
       .exec();
   }
 
@@ -604,13 +622,17 @@ export class RedisBroker {
           throw error;
         });
       if (dbResults.length === 0) {
-        logger.debug(`Finished backfilling messages from postgres to client stream`);
+        logger.debug(
+          { appName: conn.appName, clientId: conn.clientId },
+          `Finished backfilling messages from postgres to client stream`
+        );
         break;
       }
 
       conn.lastStreamedSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
       logger.debug(
-        `Queried ${dbResults.length} messages from postgres for client (messages ${dbResults[0].sequence_number} to ${conn.lastStreamedSequenceNumber})`
+        { appName: conn.appName, clientId: conn.clientId },
+        `Queried ${dbResults.length} messages from postgres (messages ${dbResults[0].sequence_number} to ${conn.lastStreamedSequenceNumber})`
       );
 
       // Write batch to client stream
@@ -630,28 +652,32 @@ export class RedisBroker {
         }
       }
 
-      // Check if we've caught up with the global stream (only if consumer group not yet created)
+      // Check if we've caught up with the chain tip stream (only if consumer group not yet created)
       if (!globalConsumerGroupCreated) {
-        const globalStreamInfo = await conn.client
-          .xInfoStream(this.globalStreamKey)
+        const chainTipStreamInfo = await conn.client
+          .xInfoStream(this.chainTipStreamKey)
           .catch((error: unknown) => {
             if ((error as Error).message?.includes('ERR no such key')) {
-              return null; // Global stream doesn't exist yet
+              return null; // Chain tip stream doesn't exist yet
             }
             throw error;
           });
 
-        if (globalStreamInfo) {
-          const firstEntry = globalStreamInfo['first-entry'] as XInfoStreamEntry | undefined;
+        if (chainTipStreamInfo) {
+          const firstEntry = chainTipStreamInfo['first-entry'] as XInfoStreamEntry | undefined;
           const firstEntryId = firstEntry ? parseInt(firstEntry.id.split('-')[0]) : 0;
 
           if (parseInt(conn.lastStreamedSequenceNumber) >= firstEntryId) {
-            // We've caught up with the global stream - create consumer group now
-            logger.info(
-              `Backfill caught up with global stream. lastBackfilled=${conn.lastStreamedSequenceNumber}, firstEntry=${firstEntryId}`
+            // We've caught up with the chain tip stream - create consumer group now
+            logger.debug(
+              { appName: conn.appName, clientId: conn.clientId },
+              `Backfill caught up with chain tip stream. lastBackfilled=${conn.lastStreamedSequenceNumber}, firstEntry=${firstEntryId}`
             );
 
-            await this.createClientGlobalStreamConsumerGroup(conn, conn.lastStreamedSequenceNumber);
+            await this.createClientChainTipStreamConsumerGroup(
+              conn,
+              conn.lastStreamedSequenceNumber
+            );
             globalConsumerGroupCreated = true;
             this.events.emit('consumerPromotedToLiveStream', {
               clientId: conn.clientId,
@@ -664,8 +690,8 @@ export class RedisBroker {
         // This ensures we don't receive duplicate messages when transitioning to live streaming.
         await conn.client
           .xGroupSetId(
-            this.globalStreamKey,
-            conn.globalClientGroupKey,
+            this.chainTipStreamKey,
+            conn.chainTipStreamGroupKey,
             `${conn.lastStreamedSequenceNumber}-0`
           )
           .catch((error: unknown) => {
@@ -684,6 +710,7 @@ export class RedisBroker {
           break;
         } else {
           logger.debug(
+            { appName: conn.appName, clientId: conn.clientId },
             `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while backfilling...`
           );
           await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
@@ -695,12 +722,14 @@ export class RedisBroker {
   }
 
   /**
-   * Live-streams the client stream from the global stream, starting from the given sequence number.
-   * @param conn - The client connection to use for the live-streaming.
+   * Feeds the client stream with messages from the chain tip stream, starting from the given
+   * sequence number.
+   * @param conn - The client connection to use for the feeding.
    * @param logger - The logger to use for logging.
-   * @returns Whether the client was demoted to backfill because it fell behind the global stream.
+   * @returns Whether the client was demoted to backfill because it fell behind the chain tip
+   * stream.
    */
-  private async liveStreamClientStreamFromGlobalStream(
+  private async feedClientStreamFromChainTipStream(
     conn: StacksClientConnection,
     logger: typeof this.logger
   ): Promise<{ demotedToBackfill: boolean }> {
@@ -714,10 +743,10 @@ export class RedisBroker {
       }
 
       const messages = await conn.client.xReadGroup(
-        conn.globalClientGroupKey,
-        conn.globalClientConsumerKey,
+        conn.chainTipStreamGroupKey,
+        conn.chainTipStreamConsumerKey,
         {
-          key: this.globalStreamKey,
+          key: this.chainTipStreamKey,
           id: '>',
         },
         {
@@ -731,7 +760,8 @@ export class RedisBroker {
           if (stream.messages.length > 0) {
             const lastReceivedMsgId = stream.messages[stream.messages.length - 1].id;
             logger.debug(
-              `Received messages ${stream.messages[0].id} - ${lastReceivedMsgId} from global stream`
+              { appName: conn.appName, clientId: conn.clientId },
+              `Received messages ${stream.messages[0].id} - ${lastReceivedMsgId} from chain tip stream`
             );
             const multi = conn.client.multi();
             for (const { id, message } of stream.messages) {
@@ -744,7 +774,7 @@ export class RedisBroker {
               }
             }
             // Acknowledge message for this consumer group
-            multi.xAck(this.globalStreamKey, conn.globalClientGroupKey, lastReceivedMsgId);
+            multi.xAck(this.chainTipStreamKey, conn.chainTipStreamGroupKey, lastReceivedMsgId);
             await multi.exec();
             conn.lastStreamedSequenceNumber = lastReceivedMsgId.split('-')[0];
           }
@@ -757,6 +787,7 @@ export class RedisBroker {
             break;
           } else {
             logger.debug(
+              { appName: conn.appName, clientId: conn.clientId },
               `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while live-streaming...`
             );
             await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
@@ -770,9 +801,9 @@ export class RedisBroker {
         }
       }
 
-      // Periodically check if we're falling behind the global stream
-      const globalStreamInfo = await conn.client
-        .xInfoStream(this.globalStreamKey)
+      // Periodically check if we're falling behind the chain tip stream
+      const chainTipStreamInfo = await conn.client
+        .xInfoStream(this.chainTipStreamKey)
         .catch((error: unknown) => {
           if ((error as Error).message?.includes('ERR no such key')) {
             return null;
@@ -780,21 +811,22 @@ export class RedisBroker {
           throw error;
         });
 
-      if (globalStreamInfo) {
-        const lastEntry = globalStreamInfo['last-entry'] as XInfoStreamEntry | undefined;
+      if (chainTipStreamInfo) {
+        const lastEntry = chainTipStreamInfo['last-entry'] as XInfoStreamEntry | undefined;
         const lastEntryId = lastEntry ? parseInt(lastEntry.id.split('-')[0]) : 0;
         const currentPos = parseInt(conn.lastStreamedSequenceNumber);
         const lag = lastEntryId - currentPos;
 
         if (lag > ENV.MAX_MSG_LAG) {
           logger.warn(
-            `Client falling behind global stream (lag=${lag}, threshold=${ENV.MAX_MSG_LAG}), demoting to postgres backfill`
+            { appName: conn.appName, clientId: conn.clientId },
+            `Client falling behind chain tip stream (lag=${lag}, threshold=${ENV.MAX_MSG_LAG}), demoting to postgres backfill`
           );
 
-          // Destroy the consumer group to release resources and allow global stream trimming.
-          // This unsubscribes this client from the global stream.
+          // Destroy the consumer group to release resources and allow chain tip stream trimming.
+          // This unsubscribes this client from the chain tip stream.
           await conn.client
-            .xGroupDestroy(this.globalStreamKey, conn.globalClientGroupKey)
+            .xGroupDestroy(this.chainTipStreamKey, conn.chainTipStreamGroupKey)
             .catch((error: unknown) => {
               logger.warn(error as Error, `Error destroying consumer group during demotion`);
             });
@@ -885,11 +917,11 @@ export class RedisBroker {
 
   /**
    * Cleanup old messages that are no longer needed by any consumers. This works by determining the
-   * oldest message in the global stream that has been acknowledged by all consumer groups and trims
+   * oldest message in the chain tip stream that has been acknowledged by all consumer groups and trims
    * the stream to that message.
    */
-  async trimGlobalStream(): Promise<GlobalStreamTrimResult> {
-    // Use an optimistic redis transaction to trim the global stream in order to prevent a race-condition
+  async trimChainTipStream(): Promise<ChainTipStreamTrimResult> {
+    // Use an optimistic redis transaction to trim the chain tip stream in order to prevent a race-condition
     // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
     // messages.
     // Create an isolated client for the WATCH transaction (required for atomic WATCH + MULTI/EXEC)
@@ -897,17 +929,17 @@ export class RedisBroker {
     try {
       await isolatedClient.connect();
 
-      // Watch the global stream group version key to ensure that this trim operation is aborted if
+      // Watch the chain tip stream group version key to ensure that this trim operation is aborted if
       // any new consumer groups are added while we're trimming.
-      await isolatedClient.watch(this.globalStreamGroupVersionKey);
+      await isolatedClient.watch(this.chainTipStreamGroupVersionKey);
 
       let groups: XInfoGroupsResponse;
       try {
-        groups = await isolatedClient.xInfoGroups(this.globalStreamKey);
+        groups = await isolatedClient.xInfoGroups(this.chainTipStreamKey);
       } catch (error) {
         if ((error as Error).message?.includes('ERR no such key')) {
-          // Global stream doesn't exist yet so nothing to trim
-          this.logger.info(`Trim performed when global stream doesn't exist yet`);
+          // Chain tip stream doesn't exist yet so nothing to trim
+          this.logger.info(`Trim performed when chain tip stream doesn't exist yet`);
           return { result: 'no_stream_exists' } as const;
         } else {
           throw error;
@@ -915,7 +947,7 @@ export class RedisBroker {
       }
 
       if (this._testHooks) {
-        for (const testFn of this._testHooks.onTrimGlobalStreamGetGroups) {
+        for (const testFn of this._testHooks.onTrimChainTipStreamGetGroups) {
           await testFn();
         }
       }
@@ -929,22 +961,22 @@ export class RedisBroker {
       }
 
       if (minDeliveredId) {
-        this.logger.info(`Trimming global stream to min delivered ID ${minDeliveredId}`);
+        this.logger.info(`Trimming chain tip stream to min delivered ID ${minDeliveredId}`);
         // All entries that have an ID lower than minDeliveredId will be evicted
         await isolatedClient
           .multi()
-          .xTrim(this.globalStreamKey, 'MINID', minDeliveredId, {
+          .xTrim(this.chainTipStreamKey, 'MINID', minDeliveredId, {
             strategyModifier: '=', // '~'
           })
           .exec();
         return { result: 'trimmed_minid', id: minDeliveredId } as const;
       } else {
-        this.logger.info(`No groups are active, trimming global stream to the last message`);
+        this.logger.info(`No groups are active, trimming chain tip stream to the last message`);
         // No groups are active, so we can trim the stream to 1, we keep the last message
         // so the ingestion code can still read the last message ID.
         await isolatedClient
           .multi()
-          .xTrim(this.globalStreamKey, 'MAXLEN', 1, {
+          .xTrim(this.chainTipStreamKey, 'MAXLEN', 1, {
             strategyModifier: '=', // '~'
           })
           .exec();
@@ -956,7 +988,7 @@ export class RedisBroker {
         this.logger.info(`Trimming aborted due to new group added`);
         return { result: 'aborted' } as const;
       } else {
-        this.logger.error(error as Error, 'Error trimming global stream');
+        this.logger.error(error as Error, 'Error trimming chain tip stream');
         throw error;
       }
     } finally {
@@ -967,9 +999,9 @@ export class RedisBroker {
   /**
    * Clean up idle/offline clients. This function handles two scenarios:
    *
-   * 1. **Idle consumers on the global stream**: If a consumer hasn't interacted with Redis for
+   * 1. **Idle consumers on the chain tip stream**: If a consumer hasn't interacted with Redis for
    *    MAX_IDLE_TIME_MS, it's considered dead/offline and is pruned. This frees up resources and
-   *    allows the global stream to be trimmed.
+   *    allows the chain tip stream to be trimmed.
    *
    * 2. **Dangling client streams**: Client streams with no active consumers are cleaned up.
    *
@@ -978,13 +1010,13 @@ export class RedisBroker {
    * This allows for graceful degradation without losing the client's stream state.
    */
   async pruneIdleClients() {
-    const fullStreamInfo = await xInfoStreamFull(this.client, this.globalStreamKey);
+    const fullStreamInfo = await xInfoStreamFull(this.client, this.chainTipStreamKey);
 
-    // Part 1: Check for idle consumers on the global stream
+    // Part 1: Check for idle consumers on the chain tip stream
     for (const group of fullStreamInfo.groups) {
       if (group.consumers.length > 1) {
         this.logger.error(
-          `Multiple consumers for global stream group ${group.name}: ${group.consumers.length}`
+          `Multiple consumers for chain tip stream group ${group.name}: ${group.consumers.length}`
         );
       }
       for (const consumer of group.consumers) {
@@ -995,14 +1027,14 @@ export class RedisBroker {
           const clientId = consumer.name.split(':').at(-1) ?? '';
           const clientStreamKey = this.getClientStreamKey(clientId);
           this.logger.info(
-            `Detected idle consumer group on global stream, client: ${clientId}, idle ms: ${idleMs}`
+            `Detected idle consumer group on chain tip stream, client: ${clientId}, idle ms: ${idleMs}`
           );
 
-          // Destroy both the global stream consumer group and the client stream.
+          // Destroy both the chain tip stream consumer group and the client stream.
           // The client will need to reconnect and re-initialize.
           await this.client
             .multi()
-            .xGroupDestroy(this.globalStreamKey, group.name)
+            .xGroupDestroy(this.chainTipStreamKey, group.name)
             .del(clientStreamKey)
             .exec()
             .catch((error: unknown) => {
@@ -1056,14 +1088,14 @@ export class RedisBroker {
 
           if (idleMs > ENV.MAX_IDLE_TIME_MS) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
-            const groupId = this.getClientGlobalStreamGroupKey(clientId);
+            const groupId = this.getClientChainTipStreamGroupKey(clientId);
 
             this.logger.info(`Detected idle client stream ${clientId}, idle ms: ${idleMs}`);
 
-            // Destroy the global stream consumer group (if it exists) and the client stream
+            // Destroy the chain tip stream consumer group (if it exists) and the client stream
             await this.client
               .multi()
-              .xGroupDestroy(this.globalStreamKey, groupId)
+              .xGroupDestroy(this.chainTipStreamKey, groupId)
               .del(clientStreamKey)
               .exec()
               .catch((error: unknown) => {

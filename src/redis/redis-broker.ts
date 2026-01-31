@@ -27,6 +27,21 @@ type StacksMessage = {
   eventBody: string;
 };
 
+/** Identifies a Stacks client on the Redis broker. */
+type StacksClient = {
+  client: RedisClient;
+  clientId: string;
+  selectedPaths: SelectedMessagePaths;
+};
+
+/** Identifies an actual Stacks client connection on the Redis broker. */
+type StacksClientConnection = StacksClient & {
+  clientStreamKey: string;
+  globalClientGroupKey: string;
+  globalClientConsumerKey: string;
+  lastStreamedSequenceNumber: string;
+};
+
 /**
  * The result of a global stream trim operation.
  * - `no_stream_exists`: the global stream does not exist.
@@ -402,10 +417,8 @@ export class RedisBroker {
 
           // Serve the client by creating the consumer group and backfilling messages from postgres.
           void this.streamMessagesToClient(
-            dedicatedClient,
-            clientId,
+            { client: dedicatedClient, clientId, selectedPaths },
             startSequenceNumber,
-            selectedPaths,
             logger
           )
             .catch(async (error: unknown) => {
@@ -463,26 +476,25 @@ export class RedisBroker {
    * 2. Full historical sync is possible without being pruned for "lagging"
    * 3. Slow clients gracefully degrade to postgres backfill instead of being disconnected
    *
-   * @param client - The redis client to use for the connection
-   * @param clientId - The ID of the client
+   * @param stacksClient - The Stacks client to use for the connection
    * @param startSequenceNumber - The resolved starting message sequence number
-   * @param selectedPaths - The message paths to fill in this stream
    * @param logger - The logger to use for logging
    */
   async streamMessagesToClient(
-    client: typeof this.client,
-    clientId: string,
+    stacksClient: StacksClient,
     startSequenceNumber: string,
-    selectedPaths: SelectedMessagePaths,
     logger: typeof this.logger
   ) {
-    await client.connect();
-
-    const clientStreamKey = this.getClientStreamKey(clientId);
-    const globalClientGroupKey = this.getClientGlobalStreamGroupKey(clientId);
-    const globalClientConsumerKey = `${this.redisStreamKeyPrefix}consumer:${clientId}`;
-
-    let lastBackfilledSequenceNumber = startSequenceNumber;
+    await stacksClient.client.connect();
+    const conn: StacksClientConnection = {
+      client: stacksClient.client,
+      clientId: stacksClient.clientId,
+      selectedPaths: stacksClient.selectedPaths,
+      clientStreamKey: this.getClientStreamKey(stacksClient.clientId),
+      globalClientGroupKey: this.getClientGlobalStreamGroupKey(stacksClient.clientId),
+      globalClientConsumerKey: `${this.redisStreamKeyPrefix}consumer:${stacksClient.clientId}`,
+      lastStreamedSequenceNumber: startSequenceNumber,
+    };
 
     // Outer loop: cycles between backfill (Phase 1) and live streaming (Phase 2).
     // A client can be demoted from live streaming back to backfill if it falls behind.
@@ -494,109 +506,8 @@ export class RedisBroker {
       // trimmed freely without being blocked by this client's position.
       let globalConsumerGroupCreated = false;
 
-      while (!this.abortController.signal.aborted) {
-        if (this._testHooks) {
-          for (const cb of this._testHooks.onBeforePgBackfillQuery) {
-            await cb(lastBackfilledSequenceNumber);
-          }
-        }
-
-        const dbResults = await this.db
-          .getMessageBatch({
-            afterSequenceNumber: lastBackfilledSequenceNumber,
-            selectedMessagePaths: selectedPaths,
-            batchSize: ENV.DB_MSG_BATCH_SIZE,
-          })
-          .catch((error: unknown) => {
-            logger.error(error as Error, `Error querying messages from postgres during backfill`);
-            throw error;
-          });
-        if (dbResults.length === 0) {
-          logger.debug(`Finished backfilling messages from postgres to client stream`);
-          break;
-        }
-
-        lastBackfilledSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
-        logger.debug(
-          `Queried ${dbResults.length} messages from postgres for client (messages ${dbResults[0].sequence_number} to ${lastBackfilledSequenceNumber})`
-        );
-
-        // Write batch to client stream
-        const multi = client.multi();
-        for (const row of dbResults) {
-          multi.xAdd(clientStreamKey, `${row.sequence_number}-0`, {
-            timestamp: row.timestamp,
-            path: row.path,
-            body: JSON.stringify(row.content),
-          });
-        }
-        await multi.exec();
-
-        if (this._testHooks) {
-          for (const cb of this._testHooks.onPgBackfillLoop) {
-            await cb(dbResults[0].sequence_number);
-          }
-        }
-
-        // Check if we've caught up with the global stream (only if consumer group not yet created)
-        if (!globalConsumerGroupCreated) {
-          const globalStreamInfo = await client
-            .xInfoStream(this.globalStreamKey)
-            .catch((error: unknown) => {
-              if ((error as Error).message?.includes('ERR no such key')) {
-                return null; // Global stream doesn't exist yet
-              }
-              throw error;
-            });
-
-          if (globalStreamInfo) {
-            const firstEntry = globalStreamInfo['first-entry'] as XInfoStreamEntry | undefined;
-            const firstEntryId = firstEntry ? parseInt(firstEntry.id.split('-')[0]) : 0;
-
-            if (parseInt(lastBackfilledSequenceNumber) >= firstEntryId) {
-              // We've caught up with the global stream - create consumer group now
-              logger.info(
-                `Backfill caught up with global stream. lastBackfilled=${lastBackfilledSequenceNumber}, firstEntry=${firstEntryId}`
-              );
-
-              await client
-                .multi()
-                .xGroupCreate(
-                  this.globalStreamKey,
-                  globalClientGroupKey,
-                  `${lastBackfilledSequenceNumber}-0`,
-                  {
-                    MKSTREAM: true,
-                  }
-                )
-                .xGroupCreateConsumer(
-                  this.globalStreamKey,
-                  globalClientGroupKey,
-                  globalClientConsumerKey
-                )
-                .incr(this.globalStreamGroupVersionKey)
-                .exec();
-
-              globalConsumerGroupCreated = true;
-              this.events.emit('consumerPromotedToLiveStream', { clientId });
-              // Continue backfilling to exhaust postgres, but consumer group now captures new messages
-            }
-          }
-        }
-
-        // Backpressure handling to avoid overwhelming redis memory
-        while (!this.abortController.signal.aborted) {
-          const clientStreamLen = await client.xLen(clientStreamKey);
-          if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
-            break;
-          } else {
-            logger.debug(
-              `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while backfilling...`
-            );
-            await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
-          }
-        }
-      }
+      const backfillResult = await this.backfillClientStreamFromPostgres(conn, logger);
+      globalConsumerGroupCreated = backfillResult.globalConsumerGroupCreated;
 
       // If consumer group not created yet (global stream didn't exist or was empty during backfill),
       // create it now at '$' to start receiving new messages
@@ -604,13 +515,8 @@ export class RedisBroker {
         logger.info(
           `Postgres backfill complete. Creating consumer group at '$' (no overlap needed)`
         );
-        await client
-          .multi()
-          .xGroupCreate(this.globalStreamKey, globalClientGroupKey, '$', { MKSTREAM: true })
-          .xGroupCreateConsumer(this.globalStreamKey, globalClientGroupKey, globalClientConsumerKey)
-          .incr(this.globalStreamGroupVersionKey)
-          .exec();
-        this.events.emit('consumerPromotedToLiveStream', { clientId });
+        await this.createClientGlobalStreamConsumerGroup(conn);
+        this.events.emit('consumerPromotedToLiveStream', { clientId: conn.clientId });
       }
 
       if (this._testHooks) {
@@ -624,116 +530,286 @@ export class RedisBroker {
       // ═══════════════════════════════════════════════════════════════════════════════
       // Read from the global stream using the consumer group and write to the client's stream.
       // If the client falls behind (exceeds MAX_MSG_LAG), demote back to Phase 1.
-      logger.info(`Starting live streaming for client at msg ID ${lastBackfilledSequenceNumber}`);
+      logger.info(
+        `Starting live streaming for client at msg ID ${conn.lastStreamedSequenceNumber}`
+      );
+      const { demotedToBackfill } = await this.liveStreamClientStreamFromGlobalStream(conn, logger);
+      // If we exited the live streaming loop without being demoted, we're shutting down
+      if (!demotedToBackfill) {
+        break;
+      }
+      logger.info(
+        `Client demoted to backfill mode, resuming from sequence ${conn.lastStreamedSequenceNumber}`
+      );
+    }
+  }
 
-      let demotedToBackfill = false;
-
-      while (!this.abortController.signal.aborted && !demotedToBackfill) {
-        if (this._testHooks) {
-          for (const cb of this._testHooks.onBeforeLivestreamXReadGroup) {
-            await cb(lastBackfilledSequenceNumber);
-          }
+  /**
+   * Creates a consumer group for a client on the global stream.
+   * @param conn - The client connection to use for the consumer group.
+   * @param startAtSequence - The sequence number to start the consumer group at. If
+   * not provided, the consumer group will be created at '$'.
+   */
+  private async createClientGlobalStreamConsumerGroup(
+    conn: StacksClientConnection,
+    startAtSequence?: string
+  ) {
+    await conn.client
+      .multi()
+      .xGroupCreate(
+        this.globalStreamKey,
+        conn.globalClientGroupKey,
+        startAtSequence ? `${startAtSequence}-0` : '$',
+        {
+          MKSTREAM: true,
         }
+      )
+      .xGroupCreateConsumer(
+        this.globalStreamKey,
+        conn.globalClientGroupKey,
+        conn.globalClientConsumerKey
+      )
+      .incr(this.globalStreamGroupVersionKey)
+      .exec();
+  }
 
-        const messages = await client.xReadGroup(
-          globalClientGroupKey,
-          globalClientConsumerKey,
-          {
-            key: this.globalStreamKey,
-            id: '>',
-          },
-          {
-            COUNT: ENV.LIVE_STREAM_BATCH_SIZE,
-            BLOCK: 1000,
-          }
-        );
+  /**
+   * Backfills the client stream from postgres, starting from the given sequence number up until it
+   * reaches the global live-stream.
+   * @param conn - The client connection to use for the backfill.
+   * @param logger - The logger to use for logging.
+   * @returns Whether the consumer group was created.
+   */
+  private async backfillClientStreamFromPostgres(
+    conn: StacksClientConnection,
+    logger: typeof this.logger
+  ): Promise<{ globalConsumerGroupCreated: boolean }> {
+    let globalConsumerGroupCreated = false;
 
-        if (messages) {
-          for (const stream of messages as XReadGroupResponseEntry[]) {
-            if (stream.messages.length > 0) {
-              const lastReceivedMsgId = stream.messages[stream.messages.length - 1].id;
-              logger.debug(
-                `Received messages ${stream.messages[0].id} - ${lastReceivedMsgId} from global stream`
-              );
-              const multi = client.multi();
-              for (const { id, message } of stream.messages) {
-                // Only forward messages that are in the client's selected paths
-                if (selectedPaths === '*' || selectedPaths.includes(message.path as MessagePath)) {
-                  multi.xAdd(clientStreamKey, id, message);
-                }
-              }
-              // Acknowledge message for this consumer group
-              multi.xAck(this.globalStreamKey, globalClientGroupKey, lastReceivedMsgId);
-              await multi.exec();
-              lastBackfilledSequenceNumber = lastReceivedMsgId.split('-')[0];
-            }
-          }
-
-          // Backpressure handling
-          while (!this.abortController.signal.aborted) {
-            const clientStreamLen = await client.xLen(clientStreamKey);
-            if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
-              break;
-            } else {
-              logger.debug(
-                `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while live-streaming...`
-              );
-              await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
-            }
-          }
-        } else {
-          if (this._testHooks) {
-            for (const cb of this._testHooks.onLiveStreamDrained) {
-              await cb();
-            }
-          }
+    while (!this.abortController.signal.aborted) {
+      if (this._testHooks) {
+        for (const cb of this._testHooks.onBeforePgBackfillQuery) {
+          await cb(conn.lastStreamedSequenceNumber);
         }
+      }
 
-        // Periodically check if we're falling behind the global stream
-        const globalStreamInfo = await client
+      const dbResults = await this.db
+        .getMessageBatch({
+          afterSequenceNumber: conn.lastStreamedSequenceNumber,
+          selectedMessagePaths: conn.selectedPaths,
+          batchSize: ENV.DB_MSG_BATCH_SIZE,
+        })
+        .catch((error: unknown) => {
+          logger.error(error as Error, `Error querying messages from postgres during backfill`);
+          throw error;
+        });
+      if (dbResults.length === 0) {
+        logger.debug(`Finished backfilling messages from postgres to client stream`);
+        break;
+      }
+
+      conn.lastStreamedSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
+      logger.debug(
+        `Queried ${dbResults.length} messages from postgres for client (messages ${dbResults[0].sequence_number} to ${conn.lastStreamedSequenceNumber})`
+      );
+
+      // Write batch to client stream
+      const multi = conn.client.multi();
+      for (const row of dbResults) {
+        multi.xAdd(conn.clientStreamKey, `${row.sequence_number}-0`, {
+          timestamp: row.timestamp,
+          path: row.path,
+          body: JSON.stringify(row.content),
+        });
+      }
+      await multi.exec();
+
+      if (this._testHooks) {
+        for (const cb of this._testHooks.onPgBackfillLoop) {
+          await cb(dbResults[0].sequence_number);
+        }
+      }
+
+      // Check if we've caught up with the global stream (only if consumer group not yet created)
+      if (!globalConsumerGroupCreated) {
+        const globalStreamInfo = await conn.client
           .xInfoStream(this.globalStreamKey)
           .catch((error: unknown) => {
             if ((error as Error).message?.includes('ERR no such key')) {
-              return null;
+              return null; // Global stream doesn't exist yet
             }
             throw error;
           });
 
         if (globalStreamInfo) {
-          const lastEntry = globalStreamInfo['last-entry'] as XInfoStreamEntry | undefined;
-          const lastEntryId = lastEntry ? parseInt(lastEntry.id.split('-')[0]) : 0;
-          const currentPos = parseInt(lastBackfilledSequenceNumber);
-          const lag = lastEntryId - currentPos;
+          const firstEntry = globalStreamInfo['first-entry'] as XInfoStreamEntry | undefined;
+          const firstEntryId = firstEntry ? parseInt(firstEntry.id.split('-')[0]) : 0;
 
-          if (lag > ENV.MAX_MSG_LAG) {
-            logger.warn(
-              `Client falling behind global stream (lag=${lag}, threshold=${ENV.MAX_MSG_LAG}), demoting to postgres backfill`
+          if (parseInt(conn.lastStreamedSequenceNumber) >= firstEntryId) {
+            // We've caught up with the global stream - create consumer group now
+            logger.info(
+              `Backfill caught up with global stream. lastBackfilled=${conn.lastStreamedSequenceNumber}, firstEntry=${firstEntryId}`
             );
 
-            // Destroy the consumer group to release resources and allow global stream trimming.
-            // This unsubscribes this client from the global stream.
-            await client
-              .xGroupDestroy(this.globalStreamKey, globalClientGroupKey)
-              .catch((error: unknown) => {
-                logger.warn(error as Error, `Error destroying consumer group during demotion`);
-              });
+            await this.createClientGlobalStreamConsumerGroup(conn, conn.lastStreamedSequenceNumber);
+            globalConsumerGroupCreated = true;
+            this.events.emit('consumerPromotedToLiveStream', {
+              clientId: conn.clientId,
+            });
+            // Continue backfilling to exhaust postgres, but consumer group now captures new messages
+          }
+        }
+      } else {
+        // Consumer group already exists - advance its position as we continue backfilling.
+        // This ensures we don't receive duplicate messages when transitioning to live streaming.
+        await conn.client
+          .xGroupSetId(
+            this.globalStreamKey,
+            conn.globalClientGroupKey,
+            `${conn.lastStreamedSequenceNumber}-0`
+          )
+          .catch((error: unknown) => {
+            // NOGROUP error can happen if the group was destroyed (e.g., by pruning)
+            if (!(error as Error).message?.includes('NOGROUP')) {
+              logger.error(error as Error, `Error advancing consumer group position`);
+              throw error;
+            }
+          });
+      }
 
-            this.events.emit('consumerDemotedToBackfill', { clientId, lag });
-            demotedToBackfill = true;
-            // Loop back to Phase 1 (backfill)
+      // Backpressure handling to avoid overwhelming redis memory
+      while (!this.abortController.signal.aborted) {
+        const clientStreamLen = await conn.client.xLen(conn.clientStreamKey);
+        if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
+          break;
+        } else {
+          logger.debug(
+            `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while backfilling...`
+          );
+          await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+        }
+      }
+    }
+
+    return { globalConsumerGroupCreated };
+  }
+
+  /**
+   * Live-streams the client stream from the global stream, starting from the given sequence number.
+   * @param conn - The client connection to use for the live-streaming.
+   * @param logger - The logger to use for logging.
+   * @returns Whether the client was demoted to backfill because it fell behind the global stream.
+   */
+  private async liveStreamClientStreamFromGlobalStream(
+    conn: StacksClientConnection,
+    logger: typeof this.logger
+  ): Promise<{ demotedToBackfill: boolean }> {
+    let demotedToBackfill = false;
+
+    while (!this.abortController.signal.aborted && !demotedToBackfill) {
+      if (this._testHooks) {
+        for (const cb of this._testHooks.onBeforeLivestreamXReadGroup) {
+          await cb(conn.lastStreamedSequenceNumber);
+        }
+      }
+
+      const messages = await conn.client.xReadGroup(
+        conn.globalClientGroupKey,
+        conn.globalClientConsumerKey,
+        {
+          key: this.globalStreamKey,
+          id: '>',
+        },
+        {
+          COUNT: ENV.LIVE_STREAM_BATCH_SIZE,
+          BLOCK: 1000,
+        }
+      );
+
+      if (messages) {
+        for (const stream of messages as XReadGroupResponseEntry[]) {
+          if (stream.messages.length > 0) {
+            const lastReceivedMsgId = stream.messages[stream.messages.length - 1].id;
+            logger.debug(
+              `Received messages ${stream.messages[0].id} - ${lastReceivedMsgId} from global stream`
+            );
+            const multi = conn.client.multi();
+            for (const { id, message } of stream.messages) {
+              // Only forward messages that are in the client's selected paths
+              if (
+                conn.selectedPaths === '*' ||
+                conn.selectedPaths.includes(message.path as MessagePath)
+              ) {
+                multi.xAdd(conn.clientStreamKey, id, message);
+              }
+            }
+            // Acknowledge message for this consumer group
+            multi.xAck(this.globalStreamKey, conn.globalClientGroupKey, lastReceivedMsgId);
+            await multi.exec();
+            conn.lastStreamedSequenceNumber = lastReceivedMsgId.split('-')[0];
+          }
+        }
+
+        // Backpressure handling
+        while (!this.abortController.signal.aborted) {
+          const clientStreamLen = await conn.client.xLen(conn.clientStreamKey);
+          if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
+            break;
+          } else {
+            logger.debug(
+              `Client stream length is ${clientStreamLen}, waiting for backpressure to clear while live-streaming...`
+            );
+            await timeout(ENV.CLIENT_REDIS_BACKPRESSURE_POLL_MS);
+          }
+        }
+      } else {
+        if (this._testHooks) {
+          for (const cb of this._testHooks.onLiveStreamDrained) {
+            await cb();
           }
         }
       }
 
-      // If we exited the live streaming loop without being demoted, we're shutting down
-      if (!demotedToBackfill) {
-        break;
-      }
+      // Periodically check if we're falling behind the global stream
+      const globalStreamInfo = await conn.client
+        .xInfoStream(this.globalStreamKey)
+        .catch((error: unknown) => {
+          if ((error as Error).message?.includes('ERR no such key')) {
+            return null;
+          }
+          throw error;
+        });
 
-      logger.info(
-        `Client demoted to backfill mode, resuming from sequence ${lastBackfilledSequenceNumber}`
-      );
+      if (globalStreamInfo) {
+        const lastEntry = globalStreamInfo['last-entry'] as XInfoStreamEntry | undefined;
+        const lastEntryId = lastEntry ? parseInt(lastEntry.id.split('-')[0]) : 0;
+        const currentPos = parseInt(conn.lastStreamedSequenceNumber);
+        const lag = lastEntryId - currentPos;
+
+        if (lag > ENV.MAX_MSG_LAG) {
+          logger.warn(
+            `Client falling behind global stream (lag=${lag}, threshold=${ENV.MAX_MSG_LAG}), demoting to postgres backfill`
+          );
+
+          // Destroy the consumer group to release resources and allow global stream trimming.
+          // This unsubscribes this client from the global stream.
+          await conn.client
+            .xGroupDestroy(this.globalStreamKey, conn.globalClientGroupKey)
+            .catch((error: unknown) => {
+              logger.warn(error as Error, `Error destroying consumer group during demotion`);
+            });
+
+          this.events.emit('consumerDemotedToBackfill', {
+            clientId: conn.clientId,
+            lag,
+          });
+          demotedToBackfill = true;
+          // Loop back to Phase 1 (backfill)
+        }
+      }
     }
+
+    return { demotedToBackfill };
   }
 
   /**

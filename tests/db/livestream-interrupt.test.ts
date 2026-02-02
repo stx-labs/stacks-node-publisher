@@ -190,51 +190,41 @@ describe('Live-stream tests', () => {
       ENV.MAX_MSG_LAG = 100;
       ENV.LIVE_STREAM_BATCH_SIZE = 10;
 
+      // Fill postgres
       ENV.DB_MSG_BATCH_SIZE = 10;
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 2;
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
-
       // Once backfilling is complete, add more msgs so that they are available to live-stream
       const onLivestreamTransition = redisBroker._testHooks!.onLiveStreamTransition.register(
         async () => {
-          for (let i = 0; i < ENV.LIVE_STREAM_BATCH_SIZE * 2; i++) {
+          for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
             await sendTestEvent(eventServer, { liveStreamMsgNumber: i });
           }
           onLivestreamTransition.unregister();
         }
       );
 
-      let onLivestreamHit = waiter<string>();
-      const onLivestream = redisBroker._testHooks!.onBeforeLivestreamXReadGroup.register(
-        async msgId => {
-          onLivestreamHit.finish(msgId);
-          onLivestream.unregister();
-          return Promise.resolve();
-        }
-      );
+      // Set up client
+      const promotedFirstTime = once(redisBroker.events, 'consumerPromotedToLiveStream');
+      let slowIngestion = false;
 
       const msgEvents = new EventEmitter();
-      const clientStallStartedWaiter = waiter();
       const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       client.start(
         async () => Promise.resolve({ messageId: lastDbMsg?.sequence_number ?? '0-0' }),
         async (id: string, _timestamp: string, _message: Message) => {
           msgEvents.emit('msg', id);
-          if (onLivestreamHit.isFinished) {
-            clientStallStartedWaiter.finish();
+          if (slowIngestion) {
             await timeout(300);
           }
         }
       );
 
-      const msgSender = setInterval(() => {
-        void sendTestEvent(eventServer, { test: 'msgPump' });
-      }, 200);
-
-      // Wait for the client to begin the msg ingestion stall
-      await clientStallStartedWaiter;
+      // Wait for the client to live stream, start ingesting slowly
+      await withTimeout(promotedFirstTime);
+      slowIngestion = true;
 
       // The client consumer redis stream should still be alive
       const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
@@ -255,41 +245,42 @@ describe('Live-stream tests', () => {
 
       // The server should demote the client to backfill after the MAX_MSG_LAG threshold is hit
       const clientDemoted = once(redisBroker.events, 'consumerDemotedToBackfill');
+      const onDemoteToBackfill = redisBroker._testHooks!.onDemoteToBackfill.register(
+        async clientId => {
+          expect(clientId).toBe(client.clientId);
 
-      // Queue up over MAX_MSG_LAG messages to force the client to be demoted
-      for (let i = 0; i < ENV.MAX_MSG_LAG * 3; i++) {
-        await sendTestEvent(eventServer, { laggingMsgNumber: i });
-      }
+          // The client consumer redis stream should still exist (demotion preserves it)
+          clientStreamExists = await redisBroker.client.exists(clientStreamKey);
+          expect(clientStreamExists).toBe(1);
 
-      await clientDemoted;
+          // The client consumer group on the chain tip stream should be destroyed (demotion destroys it)
+          const chainTipStreamGroupExists = await redisBroker.client
+            .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
+            .then(
+              () => true,
+              (error: Error) => {
+                if (error?.message.includes('NOGROUP')) {
+                  return false;
+                } else {
+                  throw error;
+                }
+              }
+            );
+          expect(chainTipStreamGroupExists).toBe(false);
 
-      // The client consumer redis stream should still exist (demotion preserves it)
-      clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(1);
+          onDemoteToBackfill.unregister();
+          return Promise.resolve();
+        }
+      );
 
-      // The client consumer group on the chain tip stream should be destroyed (demotion destroys it)
-      const chainTipStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
-        .then(
-          () => true,
-          (error: Error) => {
-            if (error?.message.includes('NOGROUP')) {
-              return false;
-            } else {
-              throw error;
-            }
-          }
-        );
-      expect(chainTipStreamGroupExists).toBe(false);
+      await withTimeout(clientDemoted);
 
-      // Set up promotion listener BEFORE allowing client to continue (to avoid race condition)
-      const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
-
-      // Remove the client msg ingestion sleep to allow it to catch up
-      onLivestreamHit = waiter();
+      // Once demoted, allow the client to catch up via backfill
+      const promotedSecondTime = once(redisBroker.events, 'consumerPromotedToLiveStream');
+      slowIngestion = false;
 
       // Wait for the client to be re-promoted to live streaming after catching up via backfill
-      await clientPromoted;
+      await withTimeout(promotedSecondTime);
 
       // Ensure client is able to continue processing messages (it doesn't need to reconnect)
       const latestDbMsg = await db.getLastMessage();
@@ -301,7 +292,6 @@ describe('Live-stream tests', () => {
         });
       });
 
-      clearInterval(msgSender);
       await client.stop();
       ENV.reload();
     });
@@ -314,6 +304,8 @@ describe('Live-stream tests', () => {
       ENV.DB_MSG_BATCH_SIZE = 10;
       ENV.LIVE_STREAM_BATCH_SIZE = 10;
       ENV.MAX_MSG_LAG = 100;
+      ENV.MAX_IDLE_TIME_MS = 200;
+
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
@@ -351,6 +343,8 @@ describe('Live-stream tests', () => {
         }
       );
 
+      const pruned = once(redisBroker.events, 'idleConsumerPruned');
+
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
         async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
@@ -387,6 +381,7 @@ describe('Live-stream tests', () => {
       for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
+      await withTimeout(pruned);
 
       // The client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);

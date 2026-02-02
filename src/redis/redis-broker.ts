@@ -95,7 +95,7 @@ export class RedisBroker {
     /** Emitted when a consumer is pruned due to being idle (not consuming) for too long */
     idleConsumerPruned: [{ clientId: string }];
     /** Emitted when a consumer falls behind MAX_MSG_LAG and is demoted from live streaming to postgres backfill */
-    consumerDemotedToBackfill: [{ clientId: string; lag: number }];
+    consumerDemotedToBackfill: [{ clientId: string }];
     /** Emitted when a consumer catches up with the chain tip stream and is promoted to live streaming */
     consumerPromotedToLiveStream: [{ clientId: string }];
     perConsumerClientCreated: [{ clientId: string }];
@@ -113,6 +113,7 @@ export class RedisBroker {
         onAddStacksMsg: createTestHook<(msgId: string) => Promise<void>>(),
         onBeforePgBackfillQuery: createTestHook<(msgId: string) => Promise<void>>(),
         onBeforeLivestreamXReadGroup: createTestHook<(msgId: string) => Promise<void>>(),
+        onDemoteToBackfill: createTestHook<(clientId: string) => Promise<void>>(),
       }
     : null;
 
@@ -591,6 +592,17 @@ export class RedisBroker {
       .exec();
   }
 
+  private async destroyClientChainTipStreamConsumerGroup(conn: StacksClientConnection) {
+    await conn.client
+      .xGroupDestroy(this.chainTipStreamKey, conn.chainTipStreamGroupKey)
+      .catch((error: unknown) => {
+        // Ignore NOGROUP errors - the group was already destroyed
+        if (!(error as Error).message?.includes('NOGROUP')) {
+          throw error;
+        }
+      });
+  }
+
   /**
    * Backfills the client stream from postgres, starting from the given sequence number up until it
    * reaches the global live-stream.
@@ -823,17 +835,14 @@ export class RedisBroker {
             `Client falling behind chain tip stream (lag=${lag}, threshold=${ENV.MAX_MSG_LAG}), demoting to postgres backfill`
           );
 
-          // Destroy the consumer group to release resources and allow chain tip stream trimming.
-          // This unsubscribes this client from the chain tip stream.
-          await conn.client
-            .xGroupDestroy(this.chainTipStreamKey, conn.chainTipStreamGroupKey)
-            .catch((error: unknown) => {
-              logger.warn(error as Error, `Error destroying consumer group during demotion`);
-            });
-
+          await this.destroyClientChainTipStreamConsumerGroup(conn);
+          if (this._testHooks) {
+            for (const cb of this._testHooks.onDemoteToBackfill) {
+              await cb(conn.clientId);
+            }
+          }
           this.events.emit('consumerDemotedToBackfill', {
             clientId: conn.clientId,
-            lag,
           });
           demotedToBackfill = true;
           // Loop back to Phase 1 (backfill)

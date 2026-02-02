@@ -13,6 +13,7 @@ describe('Prune tests', () => {
   beforeAll(async () => {
     db = await PgStore.connect();
 
+    ENV.CLEANUP_INTERVAL_MS = 120_000;
     redisBroker = new RedisBroker({
       redisUrl: ENV.REDIS_URL,
       redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
@@ -31,21 +32,6 @@ describe('Prune tests', () => {
     await db.close();
     await redisBroker.close();
   });
-
-  /*
-  // Client msg pump
-  let lastClientMsgId = 0;
-  let clientResponseWaiter = waiter<number>();
-  let clientContinueWaiter = waiter();
-
-  client.start(async id => {
-    lastClientMsgId = parseInt(id.split('-')[0]);
-    clientResponseWaiter.finish(lastClientMsgId);
-    await clientContinueWaiter;
-    clientResponseWaiter = waiter();
-    clientContinueWaiter = waiter();
-  });
-  */
 
   test('clients connecting during chain tip stream trim', async () => {
     await testWithFailCb(async fail => {

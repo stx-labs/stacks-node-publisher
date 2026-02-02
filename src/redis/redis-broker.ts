@@ -1019,6 +1019,22 @@ export class RedisBroker {
    * This allows for graceful degradation without losing the client's stream state.
    */
   async pruneIdleClients() {
+    // Helper function to prune a client group and stream together.
+    const prune = async (groupId: string, clientStreamKey: string): Promise<void> => {
+      const clientId = clientStreamKey.split(':').at(-1) ?? '';
+      await this.client
+        .multi()
+        .xGroupDestroy(this.chainTipStreamKey, groupId)
+        .del(clientStreamKey)
+        .exec()
+        .catch((error: unknown) => {
+          error = unwrapRedisMultiErrorReply(error as Error) ?? error;
+          this.logger.warn(error, `Error while pruning idle client groups`);
+        });
+      this.events.emit('idleConsumerPruned', { clientId });
+    };
+
+    // Get the full stream info to check for idle consumers on the chain tip stream
     const fullStreamInfo = await xInfoStreamFull(this.client, this.chainTipStreamKey);
 
     // Part 1: Check for idle consumers on the chain tip stream
@@ -1038,20 +1054,7 @@ export class RedisBroker {
           this.logger.info(
             `Detected idle consumer group on chain tip stream, client: ${clientId}, idle ms: ${idleMs}`
           );
-
-          // Destroy both the chain tip stream consumer group and the client stream.
-          // The client will need to reconnect and re-initialize.
-          await this.client
-            .multi()
-            .xGroupDestroy(this.chainTipStreamKey, group.name)
-            .del(clientStreamKey)
-            .exec()
-            .catch((error: unknown) => {
-              error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-              this.logger.warn(error, `Error while pruning idle client groups`);
-            });
-
-          this.events.emit('idleConsumerPruned', { clientId });
+          await prune(group.name, clientStreamKey);
         }
       }
     }
@@ -1074,10 +1077,9 @@ export class RedisBroker {
       // Check for dangling streams with no consumers
       if (groups.length === 0 || groups[0].consumers.length === 0) {
         this.logger.warn(`Dangling client stream ${clientStreamKey}`);
-        await this.client.del(clientStreamKey).catch((error: unknown) => {
-          error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-          this.logger.warn(error, `Error while pruning dangling client stream`);
-        });
+        const clientId = clientStreamKey.split(':').at(-1) ?? '';
+        const groupId = this.getClientChainTipStreamGroupKey(clientId);
+        await prune(groupId, clientStreamKey);
         continue;
       }
 
@@ -1100,19 +1102,7 @@ export class RedisBroker {
             const groupId = this.getClientChainTipStreamGroupKey(clientId);
 
             this.logger.info(`Detected idle client stream ${clientId}, idle ms: ${idleMs}`);
-
-            // Destroy the chain tip stream consumer group (if it exists) and the client stream
-            await this.client
-              .multi()
-              .xGroupDestroy(this.chainTipStreamKey, groupId)
-              .del(clientStreamKey)
-              .exec()
-              .catch((error: unknown) => {
-                error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-                this.logger.warn(error, `Error while pruning idle client stream`);
-              });
-
-            this.events.emit('idleConsumerPruned', { clientId });
+            await prune(groupId, clientStreamKey);
           }
         }
       }

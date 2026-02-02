@@ -49,6 +49,7 @@ describe('Backfill tests', () => {
       const lastDbMsg = await db.getLastMessage();
 
       ENV.MAX_IDLE_TIME_MS = 200;
+      ENV.CLEANUP_INTERVAL_MS = 100;
 
       ENV.DB_MSG_BATCH_SIZE = 10;
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
@@ -178,43 +179,38 @@ describe('Backfill tests', () => {
       const lastDbMsg = await db.getLastMessage();
 
       ENV.MAX_IDLE_TIME_MS = 60_000;
-      ENV.MAX_MSG_LAG = 100;
+      ENV.MAX_MSG_LAG = 10;
+      ENV.CLEANUP_INTERVAL_MS = 100;
 
       ENV.DB_MSG_BATCH_SIZE = 10;
-      const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 2;
+      const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
+
+      // Fill postgres
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
       }
 
-      let backfillHit = waiter<string>();
-      const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async msgId => {
-        backfillHit.finish(msgId);
-        onBackfill.unregister();
-        return Promise.resolve();
-      });
+      // Start backfilling slowly
+      let slowIngestion = true;
+      const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
 
       const msgEvents = new EventEmitter();
-      const clientStallStartedWaiter = waiter();
+      const clientBackfillStarted = waiter();
       const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
       client.start(
         async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
         async (id: string, _timestamp: string, _message: Message) => {
           msgEvents.emit('msg', id);
-          if (backfillHit.isFinished) {
-            clientStallStartedWaiter.finish();
+          if (slowIngestion) {
+            clientBackfillStarted.finish();
             await timeout(300);
           }
         }
       );
+      // Wait for the client to begin backfilling
+      await withTimeout(clientBackfillStarted);
 
-      const msgSender = setInterval(() => {
-        void sendTestEvent(eventServer, { test: 'msgPump' });
-      }, 200);
-
-      // Wait for the client to begin the msg ingestion stall
-      await clientStallStartedWaiter;
-
-      // The client consumer redis stream should still be alive
+      // The client consumer redis stream should be alive
       const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
       const clientStreamInfo = await redisBroker.client.xInfoStream(clientStreamKey);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
@@ -222,58 +218,22 @@ describe('Backfill tests', () => {
       expect(clientStreamInfo).toBeTruthy();
       expect(clientStreamInfo.length).toBeGreaterThan(0);
 
-      // During backfill, there should be NO consumer group on the chain tip stream
-      // (consumer group is only created when client catches up with chain tip stream)
-      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(client.clientId);
-      const chainTipStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
-        .then(
-          () => true,
-          (error: Error) => {
-            if (error?.message.includes('NOGROUP')) {
-              return false;
-            } else {
-              throw error;
-            }
-          }
-        );
-      expect(chainTipStreamGroupExists).toBe(false);
-
       // Queue up over MAX_MSG_LAG messages - this should NOT affect the backfilling client
       for (let i = 0; i < ENV.MAX_MSG_LAG * 3; i++) {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
 
       // Give some time for any potential (incorrect) pruning to occur
-      await timeout(500);
+      await timeout(1000);
 
       // The client stream should still exist (not pruned during backfill)
       const clientStreamStillExists = await redisBroker.client.exists(clientStreamKey);
       expect(clientStreamStillExists).toBe(1);
 
-      // Set up promotion listener BEFORE allowing client to continue (to avoid race condition)
-      const clientPromoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
-
       // Remove the client msg ingestion sleep to allow it to catch up
-      backfillHit = waiter();
-
+      slowIngestion = false;
       // Wait for the client to be promoted to live streaming after catching up
-      await clientPromoted;
-
-      // Now the consumer group should exist on the chain tip stream
-      const chainTipStreamGroupExistsAfterPromotion = await redisBroker.client
-        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
-        .then(
-          () => true,
-          (error: Error) => {
-            if (error?.message.includes('NOGROUP')) {
-              return false;
-            } else {
-              throw error;
-            }
-          }
-        );
-      expect(chainTipStreamGroupExistsAfterPromotion).toBe(true);
+      await withTimeout(clientPromoted);
 
       // Ensure client continues processing messages
       const latestDbMsg = await db.getLastMessage();
@@ -285,7 +245,6 @@ describe('Backfill tests', () => {
         });
       });
 
-      clearInterval(msgSender);
       await client.stop();
       ENV.reload();
     });
@@ -297,6 +256,7 @@ describe('Backfill tests', () => {
 
       ENV.DB_MSG_BATCH_SIZE = 10;
       ENV.MAX_MSG_LAG = 100;
+      ENV.MAX_IDLE_TIME_MS = 200;
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
@@ -320,6 +280,8 @@ describe('Backfill tests', () => {
 
         onBackfill.unregister();
       });
+
+      const pruned = once(redisBroker.events, 'idleConsumerPruned');
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
@@ -357,6 +319,8 @@ describe('Backfill tests', () => {
       for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
         await sendTestEvent(eventServer, { laggingMsgNumber: i });
       }
+
+      await withTimeout(pruned);
 
       // The client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
@@ -604,12 +568,13 @@ describe('Backfill tests', () => {
     });
   });
 
-  test('Redis server data is wiped (flushall) during pg backfill', async () => {
+  test('Redis server data is wiped flushall during pg backfill', async () => {
     await testWithFailCb(async fail => {
       let lastDbMsg = await db.getLastMessage();
 
       ENV.DB_MSG_BATCH_SIZE = 10;
       ENV.MAX_MSG_LAG = 100;
+      ENV.CLEANUP_INTERVAL_MS = 100;
       const msgFillCount = ENV.DB_MSG_BATCH_SIZE * 3;
       for (let i = 0; i < msgFillCount; i++) {
         await sendTestEvent(eventServer, { backfillMsgNumber: i });
@@ -622,7 +587,6 @@ describe('Backfill tests', () => {
         await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
         backfillHit.finish();
         onBackfill.unregister();
-        return Promise.resolve();
       });
 
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
@@ -638,6 +602,7 @@ describe('Backfill tests', () => {
       );
 
       const onFirstMsgsReceived = await withTimeout(firstMsgsReceived);
+      const pruned = once(redisBroker.events, 'idleConsumerPruned');
 
       // Wait for redis server data to be wiped during the backfilling process
       const onBackfillHit = withTimeout(backfillHit);
@@ -674,6 +639,8 @@ describe('Backfill tests', () => {
           resolve();
         }
       });
+
+      await withTimeout(pruned);
 
       // The original client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);

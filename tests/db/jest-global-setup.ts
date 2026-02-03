@@ -3,7 +3,7 @@ import * as Docker from 'dockerode';
 import { connectPostgres, timeout } from '@hirosystems/api-toolkit';
 import { createClient } from 'redis';
 
-const testContainerLabel = 'salt-n-pepper-tests';
+const testContainerLabel = 'stacks-node-publisher-tests';
 
 const pgConfig = {
   PGHOST: '127.0.0.1',
@@ -121,7 +121,7 @@ async function findFreePorts(count: number) {
 // Helper function to wait for PostgreSQL to be ready
 async function waitForPostgres(): Promise<void> {
   const sql = await connectPostgres({
-    usageName: 'salt-n-pepper-pg-tests',
+    usageName: 'stacks-node-publisher-pg-tests',
     connectionArgs: {
       host: pgConfig.PGHOST,
       port: parseInt(pgConfig.PGPORT),
@@ -137,7 +137,7 @@ async function waitForPostgres(): Promise<void> {
 async function waitForRedis(): Promise<void> {
   const redisClient = createClient({
     url: process.env['REDIS_URL'],
-    name: 'salt-n-pepper-server-tests',
+    name: 'stacks-node-publisher-server-tests',
   });
   redisClient.on('error', (err: Error) => console.error('Redis Client Error', err));
   redisClient.once('ready', () => console.log('Connected to Redis successfully!'));

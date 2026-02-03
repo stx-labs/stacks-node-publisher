@@ -1,6 +1,6 @@
-# Contributing to Salt-N-Pepper
+# Contributing to Stacks Node Publisher
 
-Thank you for considering contributing to Salt-N-Pepper! We welcome any contributions, whether it's bug fixes, new features, or improvements to the existing codebase.
+Thank you for considering contributing to Stacks Node Publisher! We welcome any contributions, whether it's bug fixes, new features, or improvements to the existing codebase.
 
 ### Your First Pull Request
 
@@ -8,7 +8,7 @@ Working on your first Pull Request? You can learn how from this free video serie
 
 [How to Contribute to an Open Source Project on GitHub](https://egghead.io/courses/how-to-contribute-to-an-open-source-project-on-github)
 
-To help you get familiar with our contribution process, we have a list of [good first issues](https://github.com/hirosystems/salt-n-pepper/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) that contain bugs that have a relatively limited scope. This is a great place to get started.
+To help you get familiar with our contribution process, we have a list of [good first issues](https://github.com/hirosystems/stacks-node-publisher/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) that contain bugs that have a relatively limited scope. This is a great place to get started.
 
 If you decide to fix an issue, please be sure to check the comment thread in case somebody is already working on a fix. If nobody is working on it at the moment, please leave a comment stating that you intend to work on it so other people don’t accidentally duplicate your effort.
 
@@ -16,7 +16,7 @@ If somebody claims an issue but doesn’t follow up for more than two weeks, it�
 
 ### Contribution Prerequisites
 
-Before running the Salt-N-Pepper, ensure that you have the following tools installed:
+Before running Stacks Node Publisher, ensure that you have the following tools installed:
 
 1. Install [NodeJS](https://nodejs.dev/) that includes `npm`
 1. Install [Pnpm](https://pnpm.io/installation)
@@ -28,13 +28,13 @@ You should also be [familiar with Git](https://docs.github.com/en/get-started/qu
 
 ### Sending a Pull Request
 
-The Salt-N-Pepper team is monitoring for pull requests. We will review your pull request and either merge it, request changes to it, or close it with an explanation.
+The Stacks Node Publisher team is monitoring for pull requests. We will review your pull request and either merge it, request changes to it, or close it with an explanation.
 
 Before submitting a pull request, please make sure the following is done:
 
 #### Run in development mode 
 
-- Fork [the repository](https://github.com/hirosystems/salt-n-pepper)
+- Fork [the repository](https://github.com/hirosystems/stacks-node-publisher)
 - Navigate to the project folder
 - Create your branch from `main` following [Semantic Commit Messages](https://gist.github.com/joshbuchea/6f47e86d2510bce28f8e7f42ae84c716)
 - Run `pnpm i` in the repository root to install dependencies.
@@ -47,7 +47,7 @@ Once you are are happy woith your code change, run these commands to be ready to
 
 - Run `pnpm lint` to lint your code with eslint and run pritter to follow our coding guidelines
 - Run `pnpm test:unit` to run unit test
-- Run `pnpm build` to build Salt-N-Pepper for production
+- Run `pnpm build` to build Stacks Node Publisher for production
 
 Now you are ready! When you send the PR make sure to sign the Contributor License Agreement and that all the checks are green.
 

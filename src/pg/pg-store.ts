@@ -56,7 +56,7 @@ export class PgStore extends BasePgStore {
       schema: ENV.PGSCHEMA,
     };
     const sql = await connectPostgres({
-      usageName: 'salt-n-pepper-pg-store',
+      usageName: 'stacks-node-publisher-pg-store',
       connectionArgs: pgConfig,
       connectionConfig: {
         poolMax: ENV.PG_CONNECTION_POOL_MAX,

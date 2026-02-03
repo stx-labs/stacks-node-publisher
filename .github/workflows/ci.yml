@@ -1,7 +1,7 @@
 # PRs:
-#   - Builds Salt-N-Pepper
+#   - Builds Stacks Node Publisher
 # Pushes:
-#   - Builds Salt-N-Pepper
+#   - Builds Stacks Node Publisher
 #   - Pushes Docker image to Docker Hub
 
 name: CI/CD

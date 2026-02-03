@@ -124,7 +124,7 @@ export class EventObserverServer {
 
     if (req.method === 'GET' && /^\/(?:status\/?)?$/.test(url.pathname)) {
       const status = {
-        server_version: `salt-n-pepper ${SERVER_VERSION.tag} (${SERVER_VERSION.branch}:${SERVER_VERSION.commit})`,
+        server_version: `stacks-node-publisher ${SERVER_VERSION.tag} (${SERVER_VERSION.branch}:${SERVER_VERSION.commit})`,
         status: 'ready',
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });

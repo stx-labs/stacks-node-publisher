@@ -14,6 +14,9 @@ import { SelectedMessagePaths } from '../../client/src';
 
 export const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
 
+/**
+ * A single row in the `messages` table in the database.
+ */
 export type DbMessage = {
   sequence_number: string;
   timestamp: string;
@@ -21,11 +24,17 @@ export type DbMessage = {
   content: string;
 };
 
+/**
+ * The result of resolving a stream position based on a block hash or message ID.
+ */
 export type StreamPositionResolution = {
   sequenceNumber: string;
   clampedToMax: boolean;
 };
 
+/**
+ * The Postgres store for the Stacks Node Publisher service.
+ */
 export class PgStore extends BasePgStore {
   _testHooks = isTestEnv
     ? {
@@ -112,10 +121,10 @@ export class PgStore extends BasePgStore {
   }
 
   /**
-   * Gets a batch of messages from the database.
+   * Retrieves a batch of messages so they can be written to a client stream.
    * @param args - The arguments for the query.
    * @param args.afterSequenceNumber - The sequence number to start after.
-   * @param args.selectedMessagePaths - The message paths to include in the query.
+   * @param args.selectedMessagePaths - The message paths to filter by in the query.
    * @param args.batchSize - The number of messages to return.
    * @returns The batch of messages.
    */

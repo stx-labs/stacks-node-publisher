@@ -27,7 +27,7 @@ type StacksMessage = {
   eventBody: string;
 };
 
-/** Identifies a Stacks client on the Redis broker. */
+/** Identifies a Stacks client (application that consumes Stacks messages) on the Redis broker. */
 type StacksClient = {
   client: RedisClient;
   appName: string;
@@ -35,7 +35,7 @@ type StacksClient = {
   selectedPaths: SelectedMessagePaths;
 };
 
-/** Identifies an actual Stacks client connection on the Redis broker. */
+/** Identifies an active Stacks client connection on the Redis broker. */
 type StacksClientConnection = StacksClient & {
   clientStreamKey: string;
   chainTipStreamGroupKey: string;
@@ -57,8 +57,8 @@ type ChainTipStreamTrimResult =
   | { result: 'aborted' };
 
 /**
- * A Redis broker for the Stacks message stream. This broker is responsible for adding messages to
- * the Redis stream and for consuming messages from the Redis stream.
+ * A Redis broker for the Stacks message stream. Responsible for ingesting messages from the Stacks
+ * node and forwarding them to clients.
  *
  * It uses three types of Redis streams:
  * - **Chain tip stream**: The primary stream where Stacks node messages are ingested. A consumer
@@ -71,7 +71,7 @@ type ChainTipStreamTrimResult =
  *
  * It uses three Redis clients:
  * - `client`: the primary client for the Stacks message stream.
- * - `ingestionClient`: a client for ingesting messages into the Redis stream.
+ * - `ingestionClient`: a client for ingesting messages into the chain tip Redis stream.
  * - `listeningClient`: a client for listening for new connections and serving clients.
  *
  * It also uses a map of per-consumer clients to serve each client individually.
@@ -335,12 +335,11 @@ export class RedisBroker {
         }
       }
 
-      const globalRedisMsg = {
+      await this.ingestionClient.xAdd(this.chainTipStreamKey, messageId, {
         timestamp: args.timestamp,
         path: args.eventPath,
         body: args.eventBody,
-      };
-      await this.ingestionClient.xAdd(this.chainTipStreamKey, messageId, globalRedisMsg);
+      });
     } catch (error) {
       // Ignore error if it's a duplicate message, which could happen if a previous xadd succeeded
       // on the server but failed to send the response back to the client (e.g. network error).
@@ -498,17 +497,14 @@ export class RedisBroker {
   ) {
     await stacksClient.client.connect();
     const conn: StacksClientConnection = {
-      client: stacksClient.client,
-      appName: stacksClient.appName,
-      clientId: stacksClient.clientId,
-      selectedPaths: stacksClient.selectedPaths,
+      ...stacksClient,
       clientStreamKey: this.getClientStreamKey(stacksClient.clientId),
       chainTipStreamGroupKey: this.getClientChainTipStreamGroupKey(stacksClient.clientId),
       chainTipStreamConsumerKey: `${this.redisStreamKeyPrefix}consumer:${stacksClient.clientId}`,
       lastStreamedSequenceNumber: startSequenceNumber,
     };
 
-    // Outer loop: cycles between backfill (Phase 1) and live streaming (Phase 2).
+    // Cycles a client between postgres backfill (Phase 1) and chain tip live streaming (Phase 2).
     // A client can be demoted from live streaming back to backfill if it falls behind.
     while (!this.abortController.signal.aborted) {
       // ═══════════════════════════════════════════════════════════════════════════════
@@ -520,14 +516,14 @@ export class RedisBroker {
         { appName: stacksClient.appName, clientId: stacksClient.clientId },
         `Starting postgres backfill for client starting at sequence ${conn.lastStreamedSequenceNumber}`
       );
-      const { globalConsumerGroupCreated } = await this.backfillClientStreamFromPostgres(
+      const { chainTipConsumerGroupCreated } = await this.backfillClientStreamFromPostgres(
         conn,
         logger
       );
 
-      // If consumer group not created yet (chain tip stream didn't exist or was empty during backfill),
-      // create it now at '$' to start receiving new messages
-      if (!globalConsumerGroupCreated) {
+      // If the chain tip stream consumer group was not created yet (chain tip stream didn't exist
+      // or was empty during backfill), create it now at '$' to start receiving new messages
+      if (!chainTipConsumerGroupCreated) {
         logger.info(
           { appName: stacksClient.appName, clientId: stacksClient.clientId },
           `Postgres backfill complete. Creating consumer group at '$' (no overlap needed) for client starting at sequence ${conn.lastStreamedSequenceNumber}`
@@ -613,8 +609,8 @@ export class RedisBroker {
   private async backfillClientStreamFromPostgres(
     conn: StacksClientConnection,
     logger: typeof this.logger
-  ): Promise<{ globalConsumerGroupCreated: boolean }> {
-    let globalConsumerGroupCreated = false;
+  ): Promise<{ chainTipConsumerGroupCreated: boolean }> {
+    let chainTipConsumerGroupCreated = false;
 
     while (!this.abortController.signal.aborted) {
       if (this._testHooks) {
@@ -665,7 +661,7 @@ export class RedisBroker {
       }
 
       // Check if we've caught up with the chain tip stream (only if consumer group not yet created)
-      if (!globalConsumerGroupCreated) {
+      if (!chainTipConsumerGroupCreated) {
         const chainTipStreamInfo = await conn.client
           .xInfoStream(this.chainTipStreamKey)
           .catch((error: unknown) => {
@@ -690,7 +686,7 @@ export class RedisBroker {
               conn,
               conn.lastStreamedSequenceNumber
             );
-            globalConsumerGroupCreated = true;
+            chainTipConsumerGroupCreated = true;
             this.events.emit('consumerPromotedToLiveStream', {
               clientId: conn.clientId,
             });
@@ -730,7 +726,7 @@ export class RedisBroker {
       }
     }
 
-    return { globalConsumerGroupCreated };
+    return { chainTipConsumerGroupCreated };
   }
 
   /**

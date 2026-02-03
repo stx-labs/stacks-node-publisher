@@ -10,9 +10,31 @@ import {
 } from '@hirosystems/api-toolkit';
 import * as path from 'path';
 import { createTestHook, isTestEnv } from '../helpers';
+import { SelectedMessagePaths } from '../../client/src';
 
 export const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
 
+/**
+ * A single row in the `messages` table in the database.
+ */
+export type DbMessage = {
+  sequence_number: string;
+  timestamp: string;
+  path: string;
+  content: string;
+};
+
+/**
+ * The result of resolving a stream position based on a block hash or message ID.
+ */
+export type StreamPositionResolution = {
+  sequenceNumber: string;
+  clampedToMax: boolean;
+};
+
+/**
+ * The Postgres store for the Stacks Node Publisher service.
+ */
 export class PgStore extends BasePgStore {
   _testHooks = isTestEnv
     ? {
@@ -69,6 +91,13 @@ export class PgStore extends BasePgStore {
     super(sql);
   }
 
+  /**
+   * Inserts a Stacks core message into the database.
+   * @param eventPath - The path of the event.
+   * @param content - The JSON-encoded content of the event.
+   * @param httpReceiveTimestamp - The timestamp of the event.
+   * @returns The sequence number and timestamp of the inserted message.
+   */
   public async insertMessage(
     eventPath: string,
     content: string,
@@ -89,6 +118,36 @@ export class PgStore extends BasePgStore {
     }
     const { sequence_number, timestamp } = insertQuery[0];
     return { sequence_number, timestamp };
+  }
+
+  /**
+   * Retrieves a batch of messages so they can be written to a client stream.
+   * @param args - The arguments for the query.
+   * @param args.afterSequenceNumber - The sequence number to start after.
+   * @param args.selectedMessagePaths - The message paths to filter by in the query.
+   * @param args.batchSize - The number of messages to return.
+   * @returns The batch of messages.
+   */
+  public async getMessageBatch(args: {
+    afterSequenceNumber: string;
+    selectedMessagePaths: SelectedMessagePaths;
+    batchSize: number;
+  }): Promise<DbMessage[]> {
+    return await this.sql<DbMessage[]>`
+      SELECT
+        sequence_number,
+        (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+        path,
+        content
+      FROM messages
+      WHERE sequence_number > ${args.afterSequenceNumber} ${
+        args.selectedMessagePaths === '*'
+          ? this.sql``
+          : this.sql`AND path IN ${this.sql(args.selectedMessagePaths)}`
+      }
+      ORDER BY sequence_number ASC
+      LIMIT ${args.batchSize}
+    `;
   }
 
   /** For testing purposes, returns the last message in the database. */
@@ -118,10 +177,10 @@ export class PgStore extends BasePgStore {
    *   available block, returns the sequence number of the highest available block (clamped).
    * - If the block hash is not found and blockHeight is not higher, returns null.
    */
-  public async resolveIndexBlockHashToSequenceNumber(
+  public async resolveBlockIdentifierToStreamPosition(
     indexBlockHash: string,
     blockHeight?: number
-  ): Promise<{ sequenceNumber: string; clampedToMax: boolean } | null> {
+  ): Promise<StreamPositionResolution | null> {
     if (!indexBlockHash || indexBlockHash === '') return null;
     // Block 0 can appear at any time randomly. To be safe, we don't allow it to be used as a
     // starting point.
@@ -167,9 +226,9 @@ export class PgStore extends BasePgStore {
    * - If the message ID exceeds the highest available, returns the highest available (clamped).
    * - If the message ID is empty/invalid or no messages exist, returns null.
    */
-  public async validateAndResolveMessageId(
+  public async resolveMessageIdToStreamPosition(
     messageId: string
-  ): Promise<{ sequenceNumber: string; clampedToMax: boolean } | null> {
+  ): Promise<StreamPositionResolution | null> {
     if (!messageId || messageId === '') return null;
 
     // Extract the sequence number from the message ID (format: "sequenceNumber-0")

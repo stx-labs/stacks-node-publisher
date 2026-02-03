@@ -48,7 +48,7 @@ describe('Stream position lookup', () => {
 
   describe('resolveIndexBlockHashToSequenceNumber', () => {
     test('returns exact sequence number when block hash is found', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(
         MID_BLOCK.indexBlockHash,
         MID_BLOCK.blockHeight
       );
@@ -59,7 +59,7 @@ describe('Stream position lookup', () => {
     });
 
     test('returns first block sequence number when queried', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(
         FIRST_BLOCK.indexBlockHash,
         FIRST_BLOCK.blockHeight
       );
@@ -70,7 +70,7 @@ describe('Stream position lookup', () => {
     });
 
     test('returns null when block 0 is queried', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(
         '0x0000000000000000000000000000000000000000000000000000000000000000',
         0
       );
@@ -78,7 +78,7 @@ describe('Stream position lookup', () => {
     });
 
     test('returns last block sequence number when queried', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(
         LAST_BLOCK.indexBlockHash,
         LAST_BLOCK.blockHeight
       );
@@ -90,7 +90,7 @@ describe('Stream position lookup', () => {
 
     test('clamps to max when block hash not found but height exceeds highest available', async () => {
       const futureBlockHeight = LAST_BLOCK.blockHeight + 100;
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(
         NON_EXISTENT_BLOCK_HASH,
         futureBlockHeight
       );
@@ -103,7 +103,7 @@ describe('Stream position lookup', () => {
 
     test('returns null when block hash not found and height is not higher than available', async () => {
       // Use a height that exists but with a non-matching hash
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(
         NON_EXISTENT_BLOCK_HASH,
         MID_BLOCK.blockHeight
       );
@@ -112,18 +112,18 @@ describe('Stream position lookup', () => {
     });
 
     test('returns null when block hash not found and no height provided', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(NON_EXISTENT_BLOCK_HASH);
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(NON_EXISTENT_BLOCK_HASH);
 
       expect(result).toBeNull();
     });
 
     test('returns null for empty block hash', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber('', 100);
+      const result = await env.db.resolveBlockIdentifierToStreamPosition('', 100);
       expect(result).toBeNull();
     });
 
     test('works without providing blockHeight when hash exists', async () => {
-      const result = await env.db.resolveIndexBlockHashToSequenceNumber(MID_BLOCK.indexBlockHash);
+      const result = await env.db.resolveBlockIdentifierToStreamPosition(MID_BLOCK.indexBlockHash);
 
       assert(result);
       expect(result.sequenceNumber).toBe(MID_BLOCK.sequenceNumber);
@@ -134,7 +134,7 @@ describe('Stream position lookup', () => {
   describe('validateAndResolveMessageId', () => {
     test('returns sequence number when message ID exists', async () => {
       const messageId = `${MID_BLOCK.sequenceNumber}-0`;
-      const result = await env.db.validateAndResolveMessageId(messageId);
+      const result = await env.db.resolveMessageIdToStreamPosition(messageId);
 
       assert(result);
       expect(result.sequenceNumber).toBe(MID_BLOCK.sequenceNumber);
@@ -143,7 +143,7 @@ describe('Stream position lookup', () => {
 
     test('returns sequence number for first message ID', async () => {
       const messageId = '1-0';
-      const result = await env.db.validateAndResolveMessageId(messageId);
+      const result = await env.db.resolveMessageIdToStreamPosition(messageId);
 
       assert(result);
       expect(result.sequenceNumber).toBe('1');
@@ -153,7 +153,7 @@ describe('Stream position lookup', () => {
     test('clamps to max when message ID exceeds highest available', async () => {
       // Use a sequence number much higher than what exists
       const futureMessageId = '999999-0';
-      const result = await env.db.validateAndResolveMessageId(futureMessageId);
+      const result = await env.db.resolveMessageIdToStreamPosition(futureMessageId);
 
       assert(result);
       // Should clamp to the highest available sequence number
@@ -162,19 +162,19 @@ describe('Stream position lookup', () => {
     });
 
     test('returns null for empty message ID', async () => {
-      const result = await env.db.validateAndResolveMessageId('');
+      const result = await env.db.resolveMessageIdToStreamPosition('');
       expect(result).toBeNull();
     });
 
     test('returns null for invalid message ID format', async () => {
-      const result = await env.db.validateAndResolveMessageId('invalid-format');
+      const result = await env.db.resolveMessageIdToStreamPosition('invalid-format');
       expect(result).toBeNull();
     });
 
     test('returns sequence number for ID within range but not necessarily existing', async () => {
       // Test with a sequence number that is within range
       const messageId = '100-0';
-      const result = await env.db.validateAndResolveMessageId(messageId);
+      const result = await env.db.resolveMessageIdToStreamPosition(messageId);
 
       assert(result);
       // Since 100 is within the range of messages (1-5400+), it should be valid

@@ -10,5 +10,7 @@ beforeAll(() => {
   process.env.REDIS_STREAM_KEY_PREFIX = `test_${crypto.randomUUID()}`;
   logger.info(`Using REDIS_STREAM_KEY_PREFIX: ${process.env.REDIS_STREAM_KEY_PREFIX}`);
 
+  process.env.CLEANUP_INTERVAL_MS = '1000';
+
   ENV.reload();
 });

@@ -4,6 +4,7 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { closeTestClients, createTestClient, sendTestEvent, testWithFailCb } from './utils';
+import { once } from 'node:events';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -13,6 +14,7 @@ describe('Prune tests', () => {
   beforeAll(async () => {
     db = await PgStore.connect();
 
+    ENV.CLEANUP_INTERVAL_MS = 120_000;
     redisBroker = new RedisBroker({
       redisUrl: ENV.REDIS_URL,
       redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
@@ -32,31 +34,16 @@ describe('Prune tests', () => {
     await redisBroker.close();
   });
 
-  /*
-  // Client msg pump
-  let lastClientMsgId = 0;
-  let clientResponseWaiter = waiter<number>();
-  let clientContinueWaiter = waiter();
-
-  client.start(async id => {
-    lastClientMsgId = parseInt(id.split('-')[0]);
-    clientResponseWaiter.finish(lastClientMsgId);
-    await clientContinueWaiter;
-    clientResponseWaiter = waiter();
-    clientContinueWaiter = waiter();
-  });
-  */
-
-  test('clients connecting during global stream trim', async () => {
+  test('clients connecting during chain tip stream trim', async () => {
     await testWithFailCb(async fail => {
       // Global stream not yet initialized
-      let trimResult = await redisBroker.trimGlobalStream();
+      let trimResult = await redisBroker.trimChainTipStream();
       expect(trimResult).toEqual({ result: 'no_stream_exists' });
 
       await sendTestEvent(eventServer);
 
       // No consumers, expect trim to maxlen
-      trimResult = await redisBroker.trimGlobalStream();
+      trimResult = await redisBroker.trimChainTipStream();
       expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
 
       const client = await createTestClient(undefined, '*', fail);
@@ -72,28 +59,27 @@ describe('Prune tests', () => {
       });
 
       // One consumer still processing a msg, expect trim to minid of the last msg received
-      trimResult = await redisBroker.trimGlobalStream();
+      trimResult = await redisBroker.trimChainTipStream();
       expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
       await client.stop();
 
-      const testFn = redisBroker._testHooks!.onTrimGlobalStreamGetGroups.register(async () => {
-        // This is called in the middle of the trim operation, add a new consumer
-        const newClient = await createTestClient(undefined, '*', fail);
-        // Wait for the client to receive a message so that we know its group is registered on the server
-        await new Promise<void>(resolve => {
-          newClient.start(
-            async () => Promise.resolve({ messageId: newClient.lastProcessedMessageId }),
-            async () => {
-              resolve();
-              return Promise.resolve();
-            }
-          );
-        });
-        await newClient.stop();
+      // This is called in the middle of the trim operation, add a new consumer
+      const newClient = await createTestClient(undefined, '*', fail);
+      const testFn = redisBroker._testHooks!.onTrimChainTipStreamGetGroups.register(async () => {
+        // Wait for the consumer group to be created on the chain tip stream (not just message receipt).
+        // Messages can be received during backfill before the chain tip consumer group is created,
+        // but the WATCH on chainTipStreamGroupVersionKey only triggers when the group is created.
+        const promoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
+        newClient.start(
+          async () => Promise.resolve({ messageId: newClient.lastProcessedMessageId }),
+          async () => Promise.resolve()
+        );
+        await promoted;
         testFn.unregister();
       });
       // Expect the trim to be aborted because a new consumer was added
-      trimResult = await redisBroker.trimGlobalStream();
+      trimResult = await redisBroker.trimChainTipStream();
+      await newClient.stop();
       expect(trimResult?.result).toBe('aborted');
     });
   });

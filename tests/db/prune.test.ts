@@ -63,9 +63,9 @@ describe('Prune tests', () => {
       expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
       await client.stop();
 
+      // This is called in the middle of the trim operation, add a new consumer
+      const newClient = await createTestClient(undefined, '*', fail);
       const testFn = redisBroker._testHooks!.onTrimChainTipStreamGetGroups.register(async () => {
-        // This is called in the middle of the trim operation, add a new consumer
-        const newClient = await createTestClient(undefined, '*', fail);
         // Wait for the consumer group to be created on the chain tip stream (not just message receipt).
         // Messages can be received during backfill before the chain tip consumer group is created,
         // but the WATCH on chainTipStreamGroupVersionKey only triggers when the group is created.
@@ -75,11 +75,11 @@ describe('Prune tests', () => {
           async () => Promise.resolve()
         );
         await promoted;
-        await newClient.stop();
         testFn.unregister();
       });
       // Expect the trim to be aborted because a new consumer was added
       trimResult = await redisBroker.trimChainTipStream();
+      await newClient.stop();
       expect(trimResult?.result).toBe('aborted');
     });
   });

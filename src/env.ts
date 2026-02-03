@@ -66,6 +66,7 @@ type Env = Static<typeof schema>;
 function getEnv() {
   const env = {};
   function reload() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     Object.keys(env).forEach(key => delete (env as Record<string, any>)[key]);
     return Object.assign(env, {
       reload,

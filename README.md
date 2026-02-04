@@ -1,6 +1,6 @@
 <div align="center">
 
-[![codecov](https://codecov.io/gh/hirosystems/salt-n-pepper/graph/badge.svg?token=wASmDf3iQU)](https://codecov.io/gh/hirosystems/salt-n-pepper)
+[![codecov](https://codecov.io/gh/hirosystems/stacks-node-publisher/graph/badge.svg?token=wASmDf3iQU)](https://codecov.io/gh/hirosystems/stacks-node-publisher)
 
 </div>
 
@@ -44,7 +44,7 @@ A store-and-stream service for Stacks blockchain events. Stacks Node Publisher p
 Install the client package:
 
 ```bash
-npm install @hirosystems/salt-n-pepper-client
+npm install @stacks/stacks-node-publisher-client
 ```
 
 ### Basic Example
@@ -55,7 +55,7 @@ import {
   MessagePath,
   StreamPosition,
   Message,
-} from '@hirosystems/salt-n-pepper-client';
+} from '@stacks/stacks-node-publisher-client';
 
 // Create the stream client
 const stream = new StacksMessageStream({
@@ -110,7 +110,7 @@ stream.start(getStartPosition, handleMessage);
 ### Handling New Blocks
 
 ```typescript
-import { MessagePath, NewBlockMessage } from '@hirosystems/salt-n-pepper-client';
+import { MessagePath, NewBlockMessage } from '@stacks/stacks-node-publisher-client';
 
 const handleMessage = async (id: string, timestamp: string, message: Message) => {
   if (message.path === MessagePath.NewBlock) {

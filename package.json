@@ -1,5 +1,5 @@
 {
-  "name": "salt-and-pepper",
+  "name": "stacks-node-publisher",
   "version": "0.0.1",
   "description": "Store-and-push service for Stacks node events",
   "main": "index.js",
@@ -22,14 +22,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hirosystems/salt-n-pepper.git"
+    "url": "git+https://github.com/stx-labs/stacks-node-publisher.git"
   },
-  "author": "Hiro Systems PBC <engineering@hiro.so> (https://hiro.so)",
+  "author": "Stacks Labs",
   "license": "GPL-3.0",
   "bugs": {
-    "url": "https://github.com/hirosystems/salt-n-pepper/issues"
+    "url": "https://github.com/stx-labs/stacks-node-publisher/issues"
   },
-  "homepage": "https://github.com/hirosystems/salt-n-pepper#readme",
+  "homepage": "https://github.com/stx-labs/stacks-node-publisher#readme",
   "prettier": "@stacks/prettier-config",
   "devDependencies": {
     "@commitlint/cli": "^19.6.1",

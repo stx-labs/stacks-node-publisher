@@ -72,7 +72,7 @@ describe('Endpoint tests', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({
-      server_version: expect.stringMatching(/^salt-n-pepper v/),
+      server_version: expect.stringMatching(/^stacks-node-publisher v/),
       status: 'ready',
     });
   });
@@ -93,7 +93,7 @@ describe('Endpoint tests', () => {
   test.skip('stream messages from redis', async () => {
     const appRedisClient = createClient({
       url: ENV.REDIS_URL,
-      name: 'salt-n-pepper-server-client-test',
+      name: 'stacks-node-publisher-server-client-test',
     });
     await appRedisClient.connect();
     const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
@@ -169,7 +169,7 @@ describe('Endpoint tests', () => {
 
     let lastMsgId = '0';
     const client = new StacksMessageStream({
-      appName: 'salt-n-pepper-server-client-test',
+      appName: 'stacks-node-publisher-server-client-test',
       redisUrl: ENV.REDIS_URL,
       redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
       options: {

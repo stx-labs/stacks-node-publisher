@@ -68,7 +68,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Use Node.js
         uses: actions/setup-node@v6
@@ -103,13 +102,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          persist-credentials: false
 
       - name: Checkout tag
         if: needs.semantic-release.outputs.new_release_published == 'true'
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
           ref: v${{ needs.semantic-release.outputs.new_release_version }}
 
       - name: Set up QEMU

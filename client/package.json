@@ -1,7 +1,7 @@
 {
-  "name": "@stacks/stacks-node-publisher-client",
+  "name": "@stacks/node-publisher-client",
   "version": "0.2.0",
-  "description": "",
+  "description": "A client to consume Stacks events from the Stacks Node Publisher service",
   "main": "./dist/index.js",
   "typings": "./dist/index.d.ts",
   "scripts": {
@@ -11,7 +11,16 @@
   "files": [
     "dist/"
   ],
-  "keywords": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stx-labs/stacks-node-publisher.git",
+    "directory": "client"
+  },
+  "keywords": [
+    "stacks",
+    "node-publisher",
+    "client"
+  ],
   "author": "Stacks Labs",
   "license": "GPL-3.0-only",
   "devDependencies": {

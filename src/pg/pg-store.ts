@@ -10,9 +10,31 @@ import {
 } from '@hirosystems/api-toolkit';
 import * as path from 'path';
 import { createTestHook, isTestEnv } from '../helpers';
+import { SelectedMessagePaths } from '../../client/src';
 
 export const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
 
+/**
+ * A single row in the `messages` table in the database.
+ */
+export type DbMessage = {
+  sequence_number: string;
+  timestamp: string;
+  path: string;
+  content: string;
+};
+
+/**
+ * The result of resolving a stream position based on a block hash or message ID.
+ */
+export type StreamPositionResolution = {
+  sequenceNumber: string;
+  clampedToMax: boolean;
+};
+
+/**
+ * The Postgres store for the Stacks Node Publisher service.
+ */
 export class PgStore extends BasePgStore {
   _testHooks = isTestEnv
     ? {
@@ -34,7 +56,7 @@ export class PgStore extends BasePgStore {
       schema: ENV.PGSCHEMA,
     };
     const sql = await connectPostgres({
-      usageName: 'salt-n-pepper-pg-store',
+      usageName: 'stacks-node-publisher-pg-store',
       connectionArgs: pgConfig,
       connectionConfig: {
         poolMax: ENV.PG_CONNECTION_POOL_MAX,
@@ -69,6 +91,13 @@ export class PgStore extends BasePgStore {
     super(sql);
   }
 
+  /**
+   * Inserts a Stacks core message into the database.
+   * @param eventPath - The path of the event.
+   * @param content - The JSON-encoded content of the event.
+   * @param httpReceiveTimestamp - The timestamp of the event.
+   * @returns The sequence number and timestamp of the inserted message.
+   */
   public async insertMessage(
     eventPath: string,
     content: string,
@@ -81,7 +110,7 @@ export class PgStore extends BasePgStore {
     }
     const insertQuery = await this.sql<{ sequence_number: string; timestamp: string }[]>`
       INSERT INTO messages (created_at, path, content)
-      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${content}::jsonb)
+      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${JSON.parse(content)})
       RETURNING sequence_number, (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp
     `;
     if (insertQuery.length !== 1) {
@@ -91,6 +120,37 @@ export class PgStore extends BasePgStore {
     return { sequence_number, timestamp };
   }
 
+  /**
+   * Retrieves a batch of messages so they can be written to a client stream.
+   * @param args - The arguments for the query.
+   * @param args.afterSequenceNumber - The sequence number to start after.
+   * @param args.selectedMessagePaths - The message paths to filter by in the query.
+   * @param args.batchSize - The number of messages to return.
+   * @returns The batch of messages.
+   */
+  public async getMessageBatch(args: {
+    afterSequenceNumber: string;
+    selectedMessagePaths: SelectedMessagePaths;
+    batchSize: number;
+  }): Promise<DbMessage[]> {
+    return await this.sql<DbMessage[]>`
+      SELECT
+        sequence_number,
+        (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
+        path,
+        content
+      FROM messages
+      WHERE sequence_number > ${args.afterSequenceNumber} ${
+        args.selectedMessagePaths === '*'
+          ? this.sql``
+          : this.sql`AND path IN ${this.sql(args.selectedMessagePaths)}`
+      }
+      ORDER BY sequence_number ASC
+      LIMIT ${args.batchSize}
+    `;
+  }
+
+  /** For testing purposes, returns the last message in the database. */
   public async getLastMessage() {
     const dbResults = await this.sql<
       { sequence_number: string; timestamp: string; path: string; content: string }[]
@@ -108,5 +168,95 @@ export class PgStore extends BasePgStore {
       return null;
     }
     return dbResults[0];
+  }
+
+  /**
+   * Resolves an index block hash to a sequence number.
+   * - If the block hash is found, returns its sequence number.
+   * - If the block hash is not found but blockHeight is provided and is higher than the highest
+   *   available block, returns the sequence number of the highest available block (clamped).
+   * - If the block hash is not found and blockHeight is not higher, returns null.
+   */
+  public async resolveBlockIdentifierToStreamPosition(
+    indexBlockHash: string,
+    blockHeight?: number
+  ): Promise<StreamPositionResolution | null> {
+    if (!indexBlockHash || indexBlockHash === '') return null;
+    // Block 0 can appear at any time randomly. To be safe, we don't allow it to be used as a
+    // starting point.
+    if (blockHeight === 0) return null;
+
+    // First, try to find the exact block hash (get the latest if multiple exist)
+    const exactMatch = await this.sql<{ sequence_number: string }[]>`
+      SELECT sequence_number
+      FROM messages
+      WHERE path = '/new_block'
+        AND content->>'index_block_hash' = ${indexBlockHash}
+      ORDER BY sequence_number DESC
+      LIMIT 1
+    `;
+    if (exactMatch.count > 0) {
+      return { sequenceNumber: exactMatch[0].sequence_number, clampedToMax: false };
+    }
+
+    // Block hash not found - check if we should clamp to the highest available
+    if (blockHeight !== undefined) {
+      // Get the highest block and its sequence number (sorted by sequence_number, not block_height,
+      // since sequence_number is the canonical ordering)
+      const maxBlock = await this.sql<{ sequence_number: string; block_height: number }[]>`
+        SELECT sequence_number, (content->>'block_height')::int AS block_height
+        FROM messages
+        WHERE path = '/new_block'
+        ORDER BY sequence_number DESC
+        LIMIT 1
+      `;
+      if (maxBlock.count > 0 && blockHeight > maxBlock[0].block_height) {
+        // The requested block height is higher than our highest - clamp to max
+        return { sequenceNumber: maxBlock[0].sequence_number, clampedToMax: true };
+      }
+    }
+
+    // Block hash not found and not eligible for clamping
+    return null;
+  }
+
+  /**
+   * Validates a message ID and returns the resolved sequence number.
+   * - If the message ID is valid (exists or is within range), returns it as-is.
+   * - If the message ID exceeds the highest available, returns the highest available (clamped).
+   * - If the message ID is empty/invalid or no messages exist, returns null.
+   */
+  public async resolveMessageIdToStreamPosition(
+    messageId: string
+  ): Promise<StreamPositionResolution | null> {
+    if (!messageId || messageId === '') return null;
+
+    // Extract the sequence number from the message ID (format: "sequenceNumber-0")
+    const sequenceNumber = messageId.split('-')[0];
+    if (!sequenceNumber || isNaN(parseInt(sequenceNumber))) {
+      return null;
+    }
+
+    // Check if this sequence number exists or is within the valid range
+    const result = await this.sql<{ max_sequence: string; exists: boolean }[]>`
+      SELECT
+        (SELECT MAX(sequence_number) FROM messages) AS max_sequence,
+        EXISTS(SELECT 1 FROM messages WHERE sequence_number = ${sequenceNumber}) AS exists
+    `;
+    if (result.count === 0 || !result[0].max_sequence) {
+      // No messages in database
+      return null;
+    }
+
+    const maxSequence = BigInt(result[0].max_sequence);
+    const requestedSequence = BigInt(sequenceNumber);
+
+    // If the requested sequence is greater than the max, clamp to max
+    if (requestedSequence > maxSequence) {
+      return { sequenceNumber: result[0].max_sequence, clampedToMax: true };
+    }
+
+    // Return the sequence number (it's valid - either exists or is within range)
+    return { sequenceNumber, clampedToMax: false };
   }
 }

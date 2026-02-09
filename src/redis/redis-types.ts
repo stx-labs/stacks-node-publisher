@@ -8,6 +8,28 @@ import { createClient, RedisClientType } from 'redis';
 
 export type RedisClient = ReturnType<typeof createClient>;
 
+/** Interface for Redis client lifecycle methods (v5 API) */
+interface RedisClientLifecycle {
+  close(): Promise<void>;
+  destroy(): void;
+}
+
+/**
+ * Gracefully close a Redis client connection.
+ * This wrapper provides proper typing for the v5 close() method.
+ */
+export function closeRedisClient(client: unknown): Promise<void> {
+  return (client as RedisClientLifecycle).close();
+}
+
+/**
+ * Immediately destroy a Redis client connection without waiting.
+ * This wrapper provides proper typing for the v5 destroy() method.
+ */
+export function destroyRedisClient(client: unknown): void {
+  (client as RedisClientLifecycle).destroy();
+}
+
 /** Helper function to get the return type of xReadGroup (default overload signature) */
 async function xReadGroupType() {
   const xReadGroupFn: RedisClientType['xReadGroup'] = null as any;
@@ -29,3 +51,12 @@ async function xInfoGroupsType() {
   return await xInfoGroupsFn(null as any);
 }
 export type XInfoGroupsResponse = Awaited<ReturnType<typeof xInfoGroupsType>>;
+
+/** Type for xRead/xReadGroup response entries */
+export type XReadGroupResponseEntry = {
+  name: string;
+  messages: { id: string; message: Record<string, string> }[];
+};
+
+/** Type for stream entry (first-entry/last-entry in xInfoStream response) */
+export type XInfoStreamEntry = { id: string; message: Record<string, string> } | null;

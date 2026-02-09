@@ -1,5 +1,5 @@
 {
-  "name": "salt-and-pepper",
+  "name": "stacks-node-publisher",
   "version": "0.0.1",
   "description": "Store-and-push service for Stacks node events",
   "main": "index.js",
@@ -22,18 +22,20 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hirosystems/salt-n-pepper.git"
+    "url": "git+https://github.com/stx-labs/stacks-node-publisher.git"
   },
-  "author": "Hiro Systems PBC <engineering@hiro.so> (https://hiro.so)",
+  "author": "Stacks Labs",
   "license": "GPL-3.0",
   "bugs": {
-    "url": "https://github.com/hirosystems/salt-n-pepper/issues"
+    "url": "https://github.com/stx-labs/stacks-node-publisher/issues"
   },
-  "homepage": "https://github.com/hirosystems/salt-n-pepper#readme",
+  "homepage": "https://github.com/stx-labs/stacks-node-publisher#readme",
+  "prettier": "@stacks/prettier-config",
   "devDependencies": {
     "@commitlint/cli": "^19.6.1",
     "@commitlint/config-conventional": "^19.6.0",
     "@eslint/js": "^9.21.0",
+    "@stacks/prettier-config": "^0.0.10",
     "@types/dockerode": "^3.3.33",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.13.9",
@@ -53,13 +55,13 @@
     "typescript-eslint": "^8.26.0"
   },
   "dependencies": {
-    "@hirosystems/api-toolkit": "^1.8.0",
-    "env-schema": "^6.0.1",
+    "@hirosystems/api-toolkit": "^1.12.0",
+    "env-schema": "^7.0.0",
     "fastify": "^5.2.1",
     "fastify-metrics": "^12.1.0",
     "node-pg-migrate": "^7.8.0",
     "p-queue": "^6.6.2",
     "postgres": "^3.4.5",
-    "redis": "^4.7.0"
+    "redis": "^5.10.0"
   }
 }

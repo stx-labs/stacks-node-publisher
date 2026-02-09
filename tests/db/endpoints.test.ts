@@ -8,10 +8,11 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { createClient } from 'redis';
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import { StacksMessageStream } from '../../client/src';
 import { timeout } from '@hirosystems/api-toolkit';
 import { buildPromServer } from '../../src/prom/prom-server';
 import { FastifyInstance } from 'fastify';
+import { Message } from '../../client/src/messages';
 
 describe('Endpoint tests', () => {
   let db: PgStore;
@@ -71,7 +72,7 @@ describe('Endpoint tests', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({
-      server_version: expect.stringMatching(/^salt-n-pepper v/),
+      server_version: expect.stringMatching(/^stacks-node-publisher v/),
       status: 'ready',
     });
   });
@@ -92,7 +93,7 @@ describe('Endpoint tests', () => {
   test.skip('stream messages from redis', async () => {
     const appRedisClient = createClient({
       url: ENV.REDIS_URL,
-      name: 'salt-n-pepper-server-client-test',
+      name: 'stacks-node-publisher-server-client-test',
     });
     await appRedisClient.connect();
     const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
@@ -103,10 +104,10 @@ describe('Endpoint tests', () => {
     let lastMsgId = '0';
     let messagedProcessed = 0;
     for (let i = 0; i < queuedMessageCount; i++) {
-      const streamMessages = await appRedisClient.xRead(
+      const streamMessages = (await appRedisClient.xRead(
         { key: streamKey, id: lastMsgId },
         { BLOCK: 3000, COUNT: 1 }
-      );
+      )) as { name: string; messages: { id: string; message: Record<string, string> }[] }[] | null;
       assert.ok(streamMessages);
       expect(streamMessages).toHaveLength(1);
       expect(streamMessages[0].messages).toHaveLength(1);
@@ -167,32 +168,36 @@ describe('Endpoint tests', () => {
     });
 
     let lastMsgId = '0';
-    const client = new StacksEventStream({
+    const client = new StacksMessageStream({
+      appName: 'stacks-node-publisher-server-client-test',
       redisUrl: ENV.REDIS_URL,
-      eventStreamType: StacksEventStreamType.all,
-      lastMessageId: lastMsgId,
       redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
-      appName: 'salt-n-pepper-server-client-test',
+      options: {
+        selectedMessagePaths: '*',
+      },
     });
     await client.connect({ waitForReady: true });
     let messagesProcessed = 0;
     let lastTimestamp = 0;
-    client.start(async (id, timestamp, path, body) => {
-      expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
-      lastMsgId = id;
+    client.start(
+      async () => Promise.resolve(lastMsgId === '0' ? null : { messageId: lastMsgId }),
+      async (id: string, timestamp: string, message: Message) => {
+        expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
+        lastMsgId = id;
 
-      expect(typeof path).toBe('string');
-      expect(path).not.toBe('');
+        expect(typeof message.path).toBe('string');
+        expect(message.path).not.toBe('');
 
-      expect(typeof body).toBe('object');
-      expect(Object.entries(body as object).length).toBeGreaterThan(0);
+        expect(typeof message.payload).toBe('object');
+        expect(Object.entries(message.payload as object).length).toBeGreaterThan(0);
 
-      expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
-      lastTimestamp = parseInt(timestamp);
+        expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
+        lastTimestamp = parseInt(timestamp);
 
-      messagesProcessed++;
-      await Promise.resolve();
-    });
+        messagesProcessed++;
+        await Promise.resolve();
+      }
+    );
     await timeout(500);
     await client.stop();
     expect(messagesProcessed).toBeGreaterThan(0);

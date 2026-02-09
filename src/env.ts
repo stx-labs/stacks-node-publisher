@@ -50,14 +50,23 @@ const schema = Type.Object({
   CLIENT_REDIS_BACKPRESSURE_POLL_MS: Type.Integer({ default: 100 }),
   /** Max idle time (ms) a consumer stream before it's considered idle and pruned. */
   MAX_IDLE_TIME_MS: Type.Integer({ default: 60_000 }),
-  /** Max number of messages that a consumer stream can lag behind compared to the last global msg before it's considered slow and pruned. */
+  /**
+   * Max number of messages that a consumer stream can lag behind compared to the last chain tip
+   * message before it's considered slow and demoted to backfill.
+   */
   MAX_MSG_LAG: Type.Integer({ default: 2000 }),
+  /**
+   * Interval (ms) for running Redis cleanup tasks (trimming chain tip stream and pruning idle
+   * clients).
+   */
+  CLEANUP_INTERVAL_MS: Type.Integer({ default: 60_000 }),
 });
 type Env = Static<typeof schema>;
 
 function getEnv() {
   const env = {};
   function reload() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     Object.keys(env).forEach(key => delete (env as Record<string, any>)[key]);
     return Object.assign(env, {
       reload,

@@ -1,7 +1,90 @@
-import { StacksEventStream, StacksEventStreamType } from '../../client/src';
+import * as fs from 'node:fs';
+import * as readline from 'node:readline/promises';
+import * as zlib from 'node:zlib';
+import { Registry } from 'prom-client';
+import { StacksMessageStream, SelectedMessagePaths } from '../../client/src';
 import { ENV } from '../../src/env';
 import { EventObserverServer } from '../../src/event-observer/event-server';
+import { PgStore } from '../../src/pg/pg-store';
+import { RedisBroker } from '../../src/redis/redis-broker';
 import { RedisClient } from '../../src/redis/redis-types';
+
+export type IntegrationTestEnv = {
+  db: PgStore;
+  redisBroker: RedisBroker;
+  eventServer: EventObserverServer;
+};
+
+/**
+ * Sets up a test environment with PgStore, RedisBroker, and EventObserverServer.
+ * Optionally loads a dump file into the database.
+ */
+export async function setupIntegrationTestEnv(options?: {
+  /** Path to a .tsv.gz dump file to load into the database */
+  dumpFile?: string;
+}): Promise<IntegrationTestEnv> {
+  const db = await PgStore.connect();
+
+  const redisBroker = new RedisBroker({
+    redisUrl: ENV.REDIS_URL,
+    redisStreamKeyPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+    db: db,
+  });
+  await redisBroker.connect({ waitForReady: true });
+
+  const promRegistry = new Registry();
+  const eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
+  await eventServer.start({ port: 0, host: '127.0.0.1' });
+
+  if (options?.dumpFile) {
+    await loadEventsDump(eventServer, redisBroker, options.dumpFile);
+  }
+
+  return { db, redisBroker, eventServer };
+}
+
+/**
+ * Tears down the test environment created by `setupTestEnv`.
+ */
+export async function teardownIntegrationTestEnv(env: IntegrationTestEnv): Promise<void> {
+  await closeTestClients();
+  await env.eventServer.close();
+  await env.db.close();
+  await redisFlushAllWithPrefix(env.redisBroker.redisStreamKeyPrefix, env.redisBroker.client);
+  await env.redisBroker.close();
+}
+
+/**
+ * Loads a .tsv.gz events dump file into the event server.
+ */
+async function loadEventsDump(
+  eventServer: EventObserverServer,
+  redisBroker: RedisBroker,
+  dumpFile: string
+): Promise<void> {
+  const rl = readline.createInterface({
+    input: fs.createReadStream(dumpFile).pipe(zlib.createGunzip()),
+    crlfDelay: Infinity,
+  });
+  // Suppress noisy logs during bulk insertion
+  const spyInfoLogs = [
+    jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}),
+    jest.spyOn(redisBroker.logger, 'info').mockImplementation(() => {}),
+  ];
+  for await (const line of rl) {
+    const [_id, timestamp, path, payload] = line.split('\t');
+    const res = await fetch(eventServer.url + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Original-Timestamp': timestamp },
+      body: payload,
+    });
+    if (res.status !== 200) {
+      throw new Error(`Failed to POST event: ${path} - ${payload.slice(0, 100)}`);
+    }
+  }
+  rl.close();
+  spyInfoLogs.forEach(spy => spy.mockRestore());
+}
 
 export async function sendTestEvent(
   eventServer: EventObserverServer,
@@ -19,7 +102,7 @@ export async function sendTestEvent(
   return res;
 }
 
-const testClients = new Set<StacksEventStream>();
+const testClients = new Set<StacksMessageStream>();
 
 export async function closeTestClients() {
   for (const client of testClients) {
@@ -29,41 +112,51 @@ export async function closeTestClients() {
 }
 
 export async function createTestClient(
-  lastMsgId = '0',
-  streamType: StacksEventStreamType = StacksEventStreamType.all,
+  lastMsgId: string | null = null,
+  selectedMessagePaths: SelectedMessagePaths = '*',
   onSequentialMsgError: (error: Error) => void
 ) {
-  const callerLine = getCallerLine();
-  const client = new StacksEventStream({
-    redisUrl: ENV.REDIS_URL,
-    eventStreamType: streamType,
-    lastMessageId: lastMsgId,
-    redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+  const client = new StacksMessageStream({
     appName: 'snp-client-test',
+    redisUrl: ENV.REDIS_URL,
+    redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+    options: {
+      selectedMessagePaths,
+    },
   });
   await client.connect({ waitForReady: true });
   testClients.add(client);
 
-  let lastReceivedMsgId = parseInt(client.lastMessageId.split('-')[0]);
-  client.events.on('msgReceived', ({ id }) => {
-    const msgId = parseInt(id.split('-')[0]);
-    // Validate that the msg ids are sequential for 'all' stream type.
-    if (streamType === StacksEventStreamType.all && msgId !== lastReceivedMsgId + 1) {
-      onSequentialMsgError(
-        new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
-      );
-    }
-    lastReceivedMsgId = msgId;
-  });
+  // Set the initial lastProcessedMessageId for sequential validation if provided
+  if (lastMsgId) {
+    client.lastProcessedMessageId = lastMsgId;
+
+    // Track the starting message ID for sequential validation
+    const callerLine = getCallerLine();
+    let lastReceivedMsgId = parseInt(lastMsgId.split('-')[0]);
+    client.events.on('msgReceived', ({ id }) => {
+      const msgId = parseInt(id.split('-')[0]);
+      // Validate that the msg ids are sequential for 'all' stream type.
+      if (selectedMessagePaths === '*' && msgId !== lastReceivedMsgId + 1) {
+        onSequentialMsgError(
+          new Error(`Out of sequence msg: ${lastReceivedMsgId} -> ${msgId} - ${callerLine}`)
+        );
+      }
+      lastReceivedMsgId = msgId;
+    });
+  }
 
   return client;
 }
 
 export async function redisFlushAllWithPrefix(prefix: string, client: RedisClient) {
-  const keys = await client.keys(`${prefix}*`);
-  if (keys.length > 0) {
-    const result = await client.del(keys);
-    expect(result).toBe(keys.length);
+  try {
+    const keys = await client.keys(`${prefix}*`);
+    if (keys.length > 0) {
+      await client.del(keys);
+    }
+  } catch (error) {
+    console.error('Error flushing test Redis with prefix', prefix, error);
   }
 }
 

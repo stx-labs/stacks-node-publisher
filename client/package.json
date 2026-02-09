@@ -1,7 +1,7 @@
 {
-  "name": "@hirosystems/salt-n-pepper-client",
+  "name": "@stacks/node-publisher-client",
   "version": "0.2.0",
-  "description": "",
+  "description": "A client to consume Stacks events from the Stacks Node Publisher service",
   "main": "./dist/index.js",
   "typings": "./dist/index.d.ts",
   "scripts": {
@@ -11,15 +11,24 @@
   "files": [
     "dist/"
   ],
-  "keywords": [],
-  "author": "Hiro Systems",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stx-labs/stacks-node-publisher.git",
+    "directory": "client"
+  },
+  "keywords": [
+    "stacks",
+    "node-publisher",
+    "client"
+  ],
+  "author": "Stacks Labs",
   "license": "GPL-3.0-only",
   "devDependencies": {
     "rimraf": "^6.0.1",
     "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@hirosystems/api-toolkit": "^1.7.2",
-    "redis": "^4.7.0"
+    "@hirosystems/api-toolkit": "^1.12.0",
+    "redis": "^5.10.0"
   }
 }

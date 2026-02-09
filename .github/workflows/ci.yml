@@ -66,6 +66,9 @@ jobs:
         with:
           node-version-file: '.nvmrc'
 
+      - name: Install version tools
+        run: npm install -g conventional-recommended-bump conventional-changelog-conventionalcommits semver
+
       - name: Calculate next version
         id: calc
         run: |
@@ -98,6 +101,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

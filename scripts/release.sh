@@ -34,7 +34,7 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Releasing version ${VERSION} (tag ${TAG}) on branch ${BRANCH}"
+echo "Updating version to ${VERSION} (tag ${TAG}) on branch ${BRANCH}"
 echo ""
 
 # Update root package.json and package-lock.json
@@ -48,7 +48,6 @@ npm version "$VERSION" --no-git-tag-version --prefix client
 echo ""
 echo "Done! Version ${VERSION} updated in all package files."
 echo "Next steps:"
-echo "  git add -A && git commit -m 'chore: bump version to ${VERSION}'"
-echo "  git tag v${VERSION}"
-echo "  git push origin ${BRANCH} && git push origin v${VERSION}"
-echo "  Then trigger the Release workflow with version: ${VERSION}"
+echo "  Create and merge Pull Request with version bump"
+echo "  Tag the release via GitHub UI with tag: v${VERSION}"
+echo "  Trigger the Release workflow via GitHub UI with version: ${VERSION}"

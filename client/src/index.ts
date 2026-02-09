@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Message, MessagePath } from './messages';
 
+export * from './messages';
+
 /**
  * The starting position for the message stream. Can be either an index block hash with block height
  * or a message ID.

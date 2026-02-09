@@ -51,7 +51,7 @@ export interface NewBlockStxMintEvent extends NewBlockEventBase {
   };
 }
 
-interface NewBlockStxBurnEvent extends NewBlockEventBase {
+export interface NewBlockStxBurnEvent extends NewBlockEventBase {
   type: NewBlockEventType.StxBurn;
   stx_burn_event: {
     sender: string;
@@ -74,7 +74,7 @@ export interface NewBlockStxLockEvent extends NewBlockEventBase {
   };
 }
 
-interface NewBlockNftTransferEvent extends NewBlockEventBase {
+export interface NewBlockNftTransferEvent extends NewBlockEventBase {
   type: NewBlockEventType.NftTransfer;
   nft_transfer_event: {
     /** Fully qualified asset ID, e.g. "ST2ZRX0K27GW0SP3GJCEMHD95TQGJMKB7G9Y0X1MH.contract-name.asset-name" */
@@ -101,7 +101,7 @@ export interface NewBlockNftMintEvent extends NewBlockEventBase {
   };
 }
 
-interface NewBlockNftBurnEvent extends NewBlockEventBase {
+export interface NewBlockNftBurnEvent extends NewBlockEventBase {
   type: NewBlockEventType.NftBurn;
   nft_burn_event: {
     /** Fully qualified asset ID, e.g. "ST2ZRX0K27GW0SP3GJCEMHD95TQGJMKB7G9Y0X1MH.contract-name.asset-name" */
@@ -114,7 +114,7 @@ interface NewBlockNftBurnEvent extends NewBlockEventBase {
   };
 }
 
-interface NewBlockFtTransferEvent extends NewBlockEventBase {
+export interface NewBlockFtTransferEvent extends NewBlockEventBase {
   type: NewBlockEventType.FtTransfer;
   ft_transfer_event: {
     /** Fully qualified asset ID, e.g. "ST2ZRX0K27GW0SP3GJCEMHD95TQGJMKB7G9Y0X1MH.contract-name.asset-name" */
@@ -135,7 +135,7 @@ export interface NewBlockFtMintEvent extends NewBlockEventBase {
   };
 }
 
-interface NewBlockFtBurnEvent extends NewBlockEventBase {
+export interface NewBlockFtBurnEvent extends NewBlockEventBase {
   type: NewBlockEventType.FtBurn;
   ft_burn_event: {
     /** Fully qualified asset ID, e.g. "ST2ZRX0K27GW0SP3GJCEMHD95TQGJMKB7G9Y0X1MH.contract-name.asset-name" */
@@ -210,7 +210,7 @@ export interface BurnchainOpDelegateStx {
   };
 }
 
-type BurnchainOp =
+export type BurnchainOp =
   | BurnchainOpRegisterAssetNft
   | BurnchainOpRegisterAssetFt
   | BurnchainOpStackStx
@@ -231,26 +231,26 @@ export type NewBlockEvent =
 
 export type NewBlockTransactionStatus = 'success' | 'abort_by_response' | 'abort_by_post_condition';
 
-type ClarityAbiTypeBuffer = { buffer: { length: number } };
-type ClarityAbiTypeResponse = { response: { ok: ClarityAbiType; error: ClarityAbiType } };
-type ClarityAbiTypeOptional = { optional: ClarityAbiType };
-type ClarityAbiTypeTuple = { tuple: { name: string; type: ClarityAbiType }[] };
-type ClarityAbiTypeList = { list: { type: ClarityAbiType; length: number } };
+export type ClarityAbiTypeBuffer = { buffer: { length: number } };
+export type ClarityAbiTypeResponse = { response: { ok: ClarityAbiType; error: ClarityAbiType } };
+export type ClarityAbiTypeOptional = { optional: ClarityAbiType };
+export type ClarityAbiTypeTuple = { tuple: { name: string; type: ClarityAbiType }[] };
+export type ClarityAbiTypeList = { list: { type: ClarityAbiType; length: number } };
 
-type ClarityAbiTypeUInt128 = 'uint128';
-type ClarityAbiTypeInt128 = 'int128';
-type ClarityAbiTypeBool = 'bool';
-type ClarityAbiTypePrincipal = 'principal';
-type ClarityAbiTypeNone = 'none';
+export type ClarityAbiTypeUInt128 = 'uint128';
+export type ClarityAbiTypeInt128 = 'int128';
+export type ClarityAbiTypeBool = 'bool';
+export type ClarityAbiTypePrincipal = 'principal';
+export type ClarityAbiTypeNone = 'none';
 
-type ClarityAbiTypePrimitive =
+export type ClarityAbiTypePrimitive =
   | ClarityAbiTypeUInt128
   | ClarityAbiTypeInt128
   | ClarityAbiTypeBool
   | ClarityAbiTypePrincipal
   | ClarityAbiTypeNone;
 
-type ClarityAbiType =
+export type ClarityAbiType =
   | ClarityAbiTypePrimitive
   | ClarityAbiTypeBuffer
   | ClarityAbiTypeResponse
@@ -258,7 +258,7 @@ type ClarityAbiType =
   | ClarityAbiTypeTuple
   | ClarityAbiTypeList;
 
-interface ClarityAbiFunction {
+export interface ClarityAbiFunction {
   name: string;
   access: 'private' | 'public' | 'read_only';
   args: {
@@ -270,13 +270,13 @@ interface ClarityAbiFunction {
   };
 }
 
-interface ClarityAbiVariable {
+export interface ClarityAbiVariable {
   name: string;
   access: 'variable' | 'constant';
   type: ClarityAbiType;
 }
 
-interface ClarityAbiMap {
+export interface ClarityAbiMap {
   name: string;
   key: {
     name: string;
@@ -288,11 +288,11 @@ interface ClarityAbiMap {
   }[];
 }
 
-interface ClarityAbiTypeFungibleToken {
+export interface ClarityAbiTypeFungibleToken {
   name: string;
 }
 
-interface ClarityAbiTypeNonFungibleToken {
+export interface ClarityAbiTypeNonFungibleToken {
   name: string;
   type: ClarityAbiType;
 }
@@ -305,7 +305,7 @@ export interface ClarityAbi {
   non_fungible_tokens: ClarityAbiTypeNonFungibleToken[];
 }
 
-interface NewBlockExecutionCost {
+export interface NewBlockExecutionCost {
   read_count: number;
   read_length: number;
   runtime: number;

@@ -24,6 +24,9 @@ export enum MessagePath {
   AttachmentsNew = '/attachments/new',
 }
 
+/**
+ * A message from the Stacks node. Consists of a path and a payload.
+ */
 export type Message =
   | { path: MessagePath.NewBlock; payload: NewBlockMessage }
   | { path: MessagePath.NewBurnBlock; payload: NewBurnBlockMessage }

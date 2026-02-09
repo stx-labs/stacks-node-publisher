@@ -3,8 +3,15 @@ import { EventObserverServer } from '../../src/event-observer/event-server';
 import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
-import { closeTestClients, createTestClient, sendTestEvent, testWithFailCb } from './utils';
+import {
+  closeTestClients,
+  createTestClient,
+  sendTestEvent,
+  testWithFailCb,
+  withTimeout,
+} from './utils';
 import { once } from 'node:events';
+import { waiter } from '@hirosystems/api-toolkit';
 
 describe('Prune tests', () => {
   let db: PgStore;
@@ -46,29 +53,33 @@ describe('Prune tests', () => {
       trimResult = await redisBroker.trimChainTipStream();
       expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
 
-      const client = await createTestClient(undefined, '*', fail);
+      // Create a new live-streaming client
+      const lastDbMsg = await db.getLastMessage();
+      const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
+      // Wait for the client to be promoted to live streaming so it creates its consumer group.
+      const promoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
+      // Wait for the client to receive a live-streamed message.
+      const liveStreamWaiter = waiter<number>();
+      client.start(
+        async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+        async (id: string) => {
+          liveStreamWaiter.finish(parseInt(id.split('-')[0]));
+          return Promise.resolve();
+        }
+      );
+      await withTimeout(promoted);
+      await sendTestEvent(eventServer);
+      const lastClientMsgId = await liveStreamWaiter;
 
-      const lastClientMsgId = await new Promise<number>(resolve => {
-        client.start(
-          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
-          async (id: string) => {
-            resolve(parseInt(id.split('-')[0]));
-            return Promise.resolve();
-          }
-        );
-      });
-
-      // One consumer still processing a msg, expect trim to minid of the last msg received
+      // Expect trim to minid of the last msg received
       trimResult = await redisBroker.trimChainTipStream();
       expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
       await client.stop();
 
-      // This is called in the middle of the trim operation, add a new consumer
+      // Create a client that will try to create a new consumer group on the chain tip stream
+      // during the trim operation.
       const newClient = await createTestClient(undefined, '*', fail);
       const testFn = redisBroker._testHooks!.onTrimChainTipStreamGetGroups.register(async () => {
-        // Wait for the consumer group to be created on the chain tip stream (not just message receipt).
-        // Messages can be received during backfill before the chain tip consumer group is created,
-        // but the WATCH on chainTipStreamGroupVersionKey only triggers when the group is created.
         const promoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
         newClient.start(
           async () => Promise.resolve({ messageId: newClient.lastProcessedMessageId }),
@@ -77,7 +88,7 @@ describe('Prune tests', () => {
         await promoted;
         testFn.unregister();
       });
-      // Expect the trim to be aborted because a new consumer was added
+      // Expect the trim to be aborted.
       trimResult = await redisBroker.trimChainTipStream();
       await newClient.stop();
       expect(trimResult?.result).toBe('aborted');

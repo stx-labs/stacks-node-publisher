@@ -79,7 +79,7 @@ jobs:
           if [ "$BRANCH" = "main" ]; then
             BUMP=$(npx conventional-recommended-bump -p conventionalcommits)
             NEXT_VERSION=$(npx semver "$LATEST_VERSION" -i "$BUMP")
-          else
+          elif [ "$BRANCH" = "alpha" ] || [ "$BRANCH" = "beta" ]; then
             CHANNEL="$BRANCH"
             if echo "$LATEST_VERSION" | grep -qE "\-${CHANNEL}\.[0-9]+$"; then
               NEXT_VERSION=$(npx semver "$LATEST_VERSION" -i prerelease --preid "$CHANNEL")
@@ -88,6 +88,10 @@ jobs:
               BASE=$(npx semver "$LATEST_VERSION" -i "$BUMP")
               NEXT_VERSION="${BASE}-${CHANNEL}.0"
             fi
+          else
+            echo "Skipping version calculation for branch '$BRANCH'"
+            echo "next_version=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           echo "next_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"

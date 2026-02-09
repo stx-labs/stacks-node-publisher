@@ -1,6 +1,6 @@
 {
   "name": "stacks-node-publisher",
-  "version": "0.0.1",
+  "version": "2.0.0",
   "description": "Store-and-push service for Stacks node events",
   "main": "index.js",
   "type": "commonjs",

@@ -41,7 +41,9 @@ jobs:
             ${{ runner.os }}-
 
       - name: Install deps
-        run: npm ci --audit=false
+        run: |
+          npm ci --audit=false
+          npm ci --prefix client --audit=false
 
       - name: Run tests
         run: npm run test -- --coverage

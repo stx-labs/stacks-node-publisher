@@ -1,13 +1,17 @@
+import { AttachmentsNewMessage } from './attachments-new';
 import { DropMempoolTxMessage } from './drop-mempool-tx';
 import { NewBlockMessage } from './new-block';
 import { NewBurnBlockMessage } from './new-burn-block';
 import { NewMempoolTxMessage } from './new-mempool-tx';
+import { NewMicroblocksMessage } from './new-microblocks';
 import { StackerDbChunksMessage } from './stackerdb-chunks';
 
+export * from './attachments-new';
 export * from './drop-mempool-tx';
 export * from './new-block';
 export * from './new-burn-block';
 export * from './new-mempool-tx';
+export * from './new-microblocks';
 export * from './stackerdb-chunks';
 
 /**
@@ -33,7 +37,7 @@ export type Message =
   | { path: MessagePath.NewMempoolTx; payload: NewMempoolTxMessage }
   | { path: MessagePath.DropMempoolTx; payload: DropMempoolTxMessage }
   | { path: MessagePath.StackerDbChunks; payload: StackerDbChunksMessage }
-  // TODO: Message implementations
-  | { path: MessagePath.NewMicroblocks; payload: unknown }
-  | { path: MessagePath.ProposalResponse; payload: unknown }
-  | { path: MessagePath.AttachmentsNew; payload: unknown };
+  | { path: MessagePath.NewMicroblocks; payload: NewMicroblocksMessage }
+  | { path: MessagePath.AttachmentsNew; payload: AttachmentsNewMessage }
+  // TODO: Message implementation
+  | { path: MessagePath.ProposalResponse; payload: unknown };

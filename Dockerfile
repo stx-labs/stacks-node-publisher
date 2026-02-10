@@ -5,8 +5,8 @@ COPY . .
 
 RUN apk add --no-cache --virtual .build-deps git
 RUN npm ci && \
+    npm ci --prefix client && \
     npm run build && \
-    npm run build --prefix client && \
     npm run generate:git-info && \
     npm prune --production && \
     npm prune --production --prefix client

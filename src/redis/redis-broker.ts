@@ -619,17 +619,38 @@ export class RedisBroker {
         }
       }
 
-      const dbResults = await this.db
-        .getMessageBatch({
+      let processedRows = 0;
+      let firstSequenceNumber: string | undefined;
+      try {
+        for await (const rows of this.db.getMessageBatchCursor({
           afterSequenceNumber: conn.lastStreamedSequenceNumber,
           selectedMessagePaths: conn.selectedPaths,
           batchSize: ENV.DB_MSG_BATCH_SIZE,
-        })
-        .catch((error: unknown) => {
-          logger.error(error as Error, `Error querying messages from postgres during backfill`);
-          throw error;
-        });
-      if (dbResults.length === 0) {
+          cursorSize: ENV.DB_MSG_CURSOR_SIZE,
+        })) {
+          if (this.abortController.signal.aborted) break;
+
+          processedRows += rows.length;
+          firstSequenceNumber ??= rows[0].sequence_number;
+          conn.lastStreamedSequenceNumber = rows[rows.length - 1].sequence_number;
+
+          // Write sub-batch to client stream
+          const multi = conn.client.multi();
+          for (const row of rows) {
+            multi.xAdd(conn.clientStreamKey, `${row.sequence_number}-0`, {
+              timestamp: row.timestamp,
+              path: row.path,
+              body: row.content, // Already a string from query's `content::text` cast.
+            });
+          }
+          await multi.exec();
+        }
+      } catch (error: unknown) {
+        logger.error(error as Error, `Error querying messages from postgres during backfill`);
+        throw error;
+      }
+
+      if (processedRows === 0) {
         logger.debug(
           { appName: conn.appName, clientId: conn.clientId },
           `Finished backfilling messages from postgres to client stream`
@@ -637,26 +658,14 @@ export class RedisBroker {
         break;
       }
 
-      conn.lastStreamedSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
       logger.debug(
         { appName: conn.appName, clientId: conn.clientId },
-        `Queried ${dbResults.length} messages from postgres (messages ${dbResults[0].sequence_number} to ${conn.lastStreamedSequenceNumber})`
+        `Queried ${processedRows} messages from postgres (messages ${firstSequenceNumber} to ${conn.lastStreamedSequenceNumber})`
       );
 
-      // Write batch to client stream
-      const multi = conn.client.multi();
-      for (const row of dbResults) {
-        multi.xAdd(conn.clientStreamKey, `${row.sequence_number}-0`, {
-          timestamp: row.timestamp,
-          path: row.path,
-          body: JSON.stringify(row.content),
-        });
-      }
-      await multi.exec();
-
-      if (this._testHooks) {
+      if (this._testHooks && firstSequenceNumber !== undefined) {
         for (const cb of this._testHooks.onPgBackfillLoop) {
-          await cb(dbResults[0].sequence_number);
+          await cb(firstSequenceNumber);
         }
       }
 

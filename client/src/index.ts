@@ -1,5 +1,5 @@
 import { createClient, RedisClientType } from 'redis';
-import { logger as defaultLogger, timeout, waiter, Waiter } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, timeout, waiter, Waiter } from '@stacks/api-toolkit';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Message, MessagePath } from './messages';

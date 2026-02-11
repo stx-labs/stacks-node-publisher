@@ -11,7 +11,7 @@ import {
   withTimeout,
 } from './utils';
 import { once } from 'node:events';
-import { waiter } from '@hirosystems/api-toolkit';
+import { waiter } from '@stacks/api-toolkit';
 
 describe('Prune tests', () => {
   let db: PgStore;

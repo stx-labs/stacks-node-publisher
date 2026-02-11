@@ -13,7 +13,7 @@ import {
   withTimeout,
 } from './utils';
 import * as assert from 'node:assert';
-import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 
 describe('Live-stream tests', () => {

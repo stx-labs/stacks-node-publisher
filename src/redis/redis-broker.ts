@@ -1,5 +1,5 @@
 import { ClientClosedError, createClient, WatchError } from 'redis';
-import { logger as defaultLogger, timeout } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, timeout } from '@stacks/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { createTestHook, isTestEnv } from '../helpers';
@@ -311,7 +311,7 @@ export class RedisBroker {
 
       if (!streamInfo || !streamInfo.groups) {
         this.events.emit('ingestionToEmptyRedisDb');
-        this.logger.info(`Message being added to an empty redis server, msgId=${messageId}`);
+        this.logger.debug(`Message being added to an empty redis server, msgId=${messageId}`);
       }
 
       // If there are groups (consumers) on the stream and the stream isn't new/empty, then check for gaps.
@@ -926,16 +926,16 @@ export class RedisBroker {
    * the stream to that message.
    */
   async trimChainTipStream(): Promise<ChainTipStreamTrimResult> {
-    // Use an optimistic redis transaction to trim the chain tip stream in order to prevent a race-condition
-    // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
-    // messages.
-    // Create an isolated client for the WATCH transaction (required for atomic WATCH + MULTI/EXEC)
+    // Use an optimistic redis transaction to trim the chain tip stream in order to prevent a
+    // race-condition where a new consumer is added while we're trimming the stream. Otherwise that
+    // new consumer could miss messages. Create an isolated client for the WATCH transaction
+    // (required for atomic WATCH + MULTI/EXEC)
     const isolatedClient = this.client.duplicate();
     try {
       await isolatedClient.connect();
 
-      // Watch the chain tip stream group version key to ensure that this trim operation is aborted if
-      // any new consumer groups are added while we're trimming.
+      // Watch the chain tip stream group version key to ensure that this trim operation is aborted
+      // if any new consumer groups are added while we're trimming.
       await isolatedClient.watch(this.chainTipStreamGroupVersionKey);
 
       let groups: XInfoGroupsResponse;

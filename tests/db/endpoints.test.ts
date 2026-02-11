@@ -9,7 +9,7 @@ import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import { createClient } from 'redis';
 import { StacksMessageStream } from '../../client/src';
-import { timeout } from '@hirosystems/api-toolkit';
+import { timeout } from '@stacks/api-toolkit';
 import { buildPromServer } from '../../src/prom/prom-server';
 import { FastifyInstance } from 'fastify';
 import { Message } from '../../client/src/messages';

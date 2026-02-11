@@ -7,7 +7,7 @@ import {
   logger,
   runMigrations,
   timeout,
-} from '@hirosystems/api-toolkit';
+} from '@stacks/api-toolkit';
 import * as path from 'path';
 import { createTestHook, isTestEnv } from '../helpers';
 import { SelectedMessagePaths } from '../../client/src';

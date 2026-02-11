@@ -55,7 +55,7 @@
     "typescript-eslint": "^8.26.0"
   },
   "dependencies": {
-    "@hirosystems/api-toolkit": "^1.12.0",
+    "@stacks/api-toolkit": "^1.12.2",
     "env-schema": "^7.0.0",
     "fastify": "^5.2.1",
     "fastify-metrics": "^12.1.0",

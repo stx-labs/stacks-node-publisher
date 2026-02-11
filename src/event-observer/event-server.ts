@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http';
-import { logger as defaultLogger, SERVER_VERSION } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, SERVER_VERSION } from '@stacks/api-toolkit';
 import { AddressInfo } from 'node:net';
 import { Counter, Histogram, Registry, Summary } from 'prom-client';
 import PQueue from 'p-queue';

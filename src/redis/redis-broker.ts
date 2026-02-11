@@ -1,5 +1,5 @@
 import { ClientClosedError, createClient, WatchError } from 'redis';
-import { logger as defaultLogger, timeout } from '@hirosystems/api-toolkit';
+import { logger as defaultLogger, timeout } from '@stacks/api-toolkit';
 import { ENV } from '../env';
 import { PgStore } from '../pg/pg-store';
 import { createTestHook, isTestEnv } from '../helpers';
@@ -311,7 +311,7 @@ export class RedisBroker {
 
       if (!streamInfo || !streamInfo.groups) {
         this.events.emit('ingestionToEmptyRedisDb');
-        this.logger.info(`Message being added to an empty redis server, msgId=${messageId}`);
+        this.logger.debug(`Message being added to an empty redis server, msgId=${messageId}`);
       }
 
       // If there are groups (consumers) on the stream and the stream isn't new/empty, then check for gaps.
@@ -619,17 +619,38 @@ export class RedisBroker {
         }
       }
 
-      const dbResults = await this.db
-        .getMessageBatch({
+      let processedRows = 0;
+      let firstSequenceNumber: string | undefined;
+      try {
+        for await (const rows of this.db.getMessageBatchCursor({
           afterSequenceNumber: conn.lastStreamedSequenceNumber,
           selectedMessagePaths: conn.selectedPaths,
           batchSize: ENV.DB_MSG_BATCH_SIZE,
-        })
-        .catch((error: unknown) => {
-          logger.error(error as Error, `Error querying messages from postgres during backfill`);
-          throw error;
-        });
-      if (dbResults.length === 0) {
+          cursorSize: ENV.DB_MSG_CURSOR_SIZE,
+        })) {
+          if (this.abortController.signal.aborted) break;
+
+          processedRows += rows.length;
+          firstSequenceNumber ??= rows[0].sequence_number;
+          conn.lastStreamedSequenceNumber = rows[rows.length - 1].sequence_number;
+
+          // Write sub-batch to client stream
+          const multi = conn.client.multi();
+          for (const row of rows) {
+            multi.xAdd(conn.clientStreamKey, `${row.sequence_number}-0`, {
+              timestamp: row.timestamp,
+              path: row.path,
+              body: row.content, // Already a string from query's `content::text` cast.
+            });
+          }
+          await multi.exec();
+        }
+      } catch (error: unknown) {
+        logger.error(error as Error, `Error querying messages from postgres during backfill`);
+        throw error;
+      }
+
+      if (processedRows === 0) {
         logger.debug(
           { appName: conn.appName, clientId: conn.clientId },
           `Finished backfilling messages from postgres to client stream`
@@ -637,26 +658,14 @@ export class RedisBroker {
         break;
       }
 
-      conn.lastStreamedSequenceNumber = dbResults[dbResults.length - 1].sequence_number;
       logger.debug(
         { appName: conn.appName, clientId: conn.clientId },
-        `Queried ${dbResults.length} messages from postgres (messages ${dbResults[0].sequence_number} to ${conn.lastStreamedSequenceNumber})`
+        `Queried ${processedRows} messages from postgres (messages ${firstSequenceNumber} to ${conn.lastStreamedSequenceNumber})`
       );
 
-      // Write batch to client stream
-      const multi = conn.client.multi();
-      for (const row of dbResults) {
-        multi.xAdd(conn.clientStreamKey, `${row.sequence_number}-0`, {
-          timestamp: row.timestamp,
-          path: row.path,
-          body: JSON.stringify(row.content),
-        });
-      }
-      await multi.exec();
-
-      if (this._testHooks) {
+      if (this._testHooks && firstSequenceNumber !== undefined) {
         for (const cb of this._testHooks.onPgBackfillLoop) {
-          await cb(dbResults[0].sequence_number);
+          await cb(firstSequenceNumber);
         }
       }
 
@@ -926,16 +935,16 @@ export class RedisBroker {
    * the stream to that message.
    */
   async trimChainTipStream(): Promise<ChainTipStreamTrimResult> {
-    // Use an optimistic redis transaction to trim the chain tip stream in order to prevent a race-condition
-    // where a new consumer is added while we're trimming the stream. Otherwise that new consumer could miss
-    // messages.
-    // Create an isolated client for the WATCH transaction (required for atomic WATCH + MULTI/EXEC)
+    // Use an optimistic redis transaction to trim the chain tip stream in order to prevent a
+    // race-condition where a new consumer is added while we're trimming the stream. Otherwise that
+    // new consumer could miss messages. Create an isolated client for the WATCH transaction
+    // (required for atomic WATCH + MULTI/EXEC)
     const isolatedClient = this.client.duplicate();
     try {
       await isolatedClient.connect();
 
-      // Watch the chain tip stream group version key to ensure that this trim operation is aborted if
-      // any new consumer groups are added while we're trimming.
+      // Watch the chain tip stream group version key to ensure that this trim operation is aborted
+      // if any new consumer groups are added while we're trimming.
       await isolatedClient.watch(this.chainTipStreamGroupVersionKey);
 
       let groups: XInfoGroupsResponse;

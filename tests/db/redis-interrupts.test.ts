@@ -6,7 +6,7 @@ import { Registry } from 'prom-client';
 import { RedisBroker } from '../../src/redis/redis-broker';
 import { ENV } from '../../src/env';
 import * as Docker from 'dockerode';
-import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { timeout, waiter } from '@stacks/api-toolkit';
 import {
   closeTestClients,
   createTestClient,

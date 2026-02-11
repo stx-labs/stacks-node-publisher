@@ -11,7 +11,7 @@ import {
   testWithFailCb,
   withTimeout,
 } from './utils';
-import { waiter } from '@hirosystems/api-toolkit';
+import { waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 
 describe('Multiple clients tests', () => {

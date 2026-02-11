@@ -1,4 +1,4 @@
-import { timeout } from '@hirosystems/api-toolkit';
+import { timeout } from '@stacks/api-toolkit';
 import * as events from 'node:events';
 
 describe('Helper tests', () => {

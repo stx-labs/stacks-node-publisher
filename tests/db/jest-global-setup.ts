@@ -1,6 +1,6 @@
 import * as net from 'node:net';
 import * as Docker from 'dockerode';
-import { connectPostgres, timeout } from '@hirosystems/api-toolkit';
+import { connectPostgres, timeout } from '@stacks/api-toolkit';
 import { createClient } from 'redis';
 
 const testContainerLabel = 'stacks-node-publisher-tests';

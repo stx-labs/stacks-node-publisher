@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { Registry } from 'prom-client';
-import { PINO_LOGGER_CONFIG } from '@hirosystems/api-toolkit';
+import { PINO_LOGGER_CONFIG } from '@stacks/api-toolkit';
 
 export async function buildPromServer(args: { registry: Registry }) {
   const promServer = Fastify({

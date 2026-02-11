@@ -12,7 +12,7 @@ import {
   sendTestEvent,
   testWithFailCb,
 } from './utils';
-import { timeout, waiter } from '@hirosystems/api-toolkit';
+import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 
 describe('Postgres interrupts', () => {

@@ -1,5 +1,5 @@
 import * as assert from 'node:assert/strict';
-import { waiter } from '@hirosystems/api-toolkit';
+import { waiter } from '@stacks/api-toolkit';
 import {
   createTestClient,
   setupIntegrationTestEnv,

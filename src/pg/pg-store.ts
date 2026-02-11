@@ -7,7 +7,7 @@ import {
   logger,
   runMigrations,
   timeout,
-} from '@hirosystems/api-toolkit';
+} from '@stacks/api-toolkit';
 import * as path from 'path';
 import { createTestHook, isTestEnv } from '../helpers';
 import { SelectedMessagePaths } from '../../client/src';
@@ -121,24 +121,30 @@ export class PgStore extends BasePgStore {
   }
 
   /**
-   * Retrieves a batch of messages so they can be written to a client stream.
+   * Streams a batch of messages using a PostgreSQL cursor for memory-efficient processing so they
+   * can be written to a client stream.
+   * - Uses `content::text` to avoid the JSONB parse + JSON.stringify round-trip
+   * - Yields rows in small sub-batches via a cursor, keeping peak memory usage low
+   *
    * @param args - The arguments for the query.
    * @param args.afterSequenceNumber - The sequence number to start after.
    * @param args.selectedMessagePaths - The message paths to filter by in the query.
-   * @param args.batchSize - The number of messages to return.
-   * @returns The batch of messages.
+   * @param args.batchSize - The total number of messages to return (SQL LIMIT).
+   * @param args.cursorSize - Number of rows to load into memory at once from the cursor.
+   * @returns An async generator yielding sub-batches of messages.
    */
-  public async getMessageBatch(args: {
+  public async *getMessageBatchCursor(args: {
     afterSequenceNumber: string;
     selectedMessagePaths: SelectedMessagePaths;
     batchSize: number;
-  }): Promise<DbMessage[]> {
-    return await this.sql<DbMessage[]>`
+    cursorSize: number;
+  }): AsyncGenerator<DbMessage[]> {
+    const cursor = this.sql<DbMessage[]>`
       SELECT
         sequence_number,
         (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp,
         path,
-        content
+        content::text
       FROM messages
       WHERE sequence_number > ${args.afterSequenceNumber} ${
         args.selectedMessagePaths === '*'
@@ -147,7 +153,11 @@ export class PgStore extends BasePgStore {
       }
       ORDER BY sequence_number ASC
       LIMIT ${args.batchSize}
-    `;
+    `.cursor(args.cursorSize);
+
+    for await (const rows of cursor) {
+      yield rows;
+    }
   }
 
   /** For testing purposes, returns the last message in the database. */

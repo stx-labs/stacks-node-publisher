@@ -1,7 +1,7 @@
 import { PgStore } from './pg/pg-store';
 import { ENV } from './env';
 import { isProdEnv } from './helpers';
-import { buildProfilerServer, logger, registerShutdownConfig } from '@hirosystems/api-toolkit';
+import { buildProfilerServer, logger, registerShutdownConfig } from '@stacks/api-toolkit';
 import { EventObserverServer } from './event-observer/event-server';
 import { buildPromServer } from './prom/prom-server';
 import { Registry, collectDefaultMetrics } from 'prom-client';

@@ -1,4 +1,4 @@
-import { logger } from '@hirosystems/api-toolkit';
+import { logger } from '@stacks/api-toolkit';
 import { ENV } from '../../src/env';
 
 beforeAll(() => {

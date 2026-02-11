@@ -28,7 +28,7 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@hirosystems/api-toolkit": "^1.12.0",
+    "@stacks/api-toolkit": "^1.12.2",
     "@stacks/transactions": "^7.3.1",
     "redis": "^5.10.0"
   }

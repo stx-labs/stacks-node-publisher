@@ -160,6 +160,7 @@ const handleMessage = async (id: string, timestamp: string, message: Message) =>
 | `REDIS_URL` | - | Redis connection URL |
 | `REDIS_STREAM_KEY_PREFIX` | `""` | Prefix for Redis keys |
 | `DB_MSG_BATCH_SIZE` | `100` | Batch size for DB reads during backfill |
+| `DB_MSG_CURSOR_SIZE` | `10` | Cursor page size for streaming rows during backfill (controls peak memory) |
 | `CLIENT_REDIS_STREAM_MAX_LEN` | `100` | Max messages in client stream before backpressure |
 | `MAX_IDLE_TIME_MS` | `60000` | Max idle time before client is pruned |
 | `MAX_MSG_LAG` | `2000` | Max message lag before slow client is pruned |

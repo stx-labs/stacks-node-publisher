@@ -55,8 +55,6 @@
         "--no-cache",
         "--selectProjects",
         "db-tests",
-        "-t",
-        "Node synchronization"
       ],
       "outputCapture": "std",
       "console": "internalConsole",

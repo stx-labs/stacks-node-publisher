@@ -72,7 +72,7 @@ export class EventObserverServer {
           return;
         }
         case 'ignore': {
-          this.logger.info('Ignoring extra genesis block (height 0)');
+          this.logger.info('Ignoring extraneous genesis block (height 0)');
           return;
         }
         case 'reject': {

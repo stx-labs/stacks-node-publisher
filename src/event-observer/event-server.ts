@@ -36,10 +36,14 @@ export class EventObserverServer {
     eventBody: string,
     httpReceiveTimestamp: Date
   ): Promise<void> {
+    // Messages are parsed into a JSON object for validation and to make sure they are stored as
+    // JSONB in the database.
     const jsonBody = JSON.parse(eventBody) as Record<string, unknown>;
     let timestamp: string | undefined;
     let sequenceNumber: string | undefined;
 
+    // Handle `/new_block` messages specially to ensure block continuity and gracefully handle
+    // repeated blocks if the Stacks node is behind us.
     if (eventPath === '/new_block') {
       const blockHeight = jsonBody.block_height as number;
       const indexBlockHash = jsonBody.index_block_hash as string;
@@ -56,7 +60,9 @@ export class EventObserverServer {
       switch (result.action) {
         case 'write': {
           if (this.skipMessages) {
-            this.logger.info(`Resuming event ingestion at block ${blockHeight} ${indexBlockHash}`);
+            this.logger.info(
+              `Resuming event ingestion at block ${blockHeight} ${indexBlockHash}, Stacks node has caught up`
+            );
             this.skipMessages = false;
           }
           if (!result.sequence_number || !result.timestamp) {
@@ -67,12 +73,14 @@ export class EventObserverServer {
           break;
         }
         case 'skip': {
-          this.logger.info(`Skipping previously ingested block ${blockHeight} ${indexBlockHash}`);
+          this.logger.info(
+            `Repeated block detected at ${blockHeight} ${indexBlockHash}, entering 'skip' mode until Stacks node catches up`
+          );
           this.skipMessages = true;
           return;
         }
         case 'ignore': {
-          this.logger.info('Ignoring extraneous genesis block (height 0)');
+          this.logger.info('Ignoring repeated genesis block (height 0)');
           return;
         }
         case 'reject': {
@@ -83,7 +91,7 @@ export class EventObserverServer {
       }
     } else {
       if (this.skipMessages) {
-        this.logger.info(`Skipping ${eventPath} message, node still catching up`);
+        this.logger.debug(`Skipping ${eventPath} message, node still catching up`);
         return;
       }
       // Storing the event in postgres is critical, if this fails then throw so the observer server

@@ -130,7 +130,7 @@ export class PgStore extends BasePgStore {
    * Validates and conditionally inserts a `/new_block` message in a single query.
    * Uses CTEs to check block continuity before inserting:
    * - If DB has no blocks: writes (first block ever).
-   * - If `block_height` is 0 and DB has blocks: ignores (genesis block is harmless).
+   * - If `block_height` is 0 and DB has blocks: ignores (repeated genesis blocks are harmless).
    * - If `index_block_hash` already exists: skips (node is behind us).
    * - If `parent_index_block_hash` exists: writes (normal continuation).
    * - Otherwise: rejects (gap detected).

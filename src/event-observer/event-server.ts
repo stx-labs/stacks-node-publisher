@@ -271,8 +271,8 @@ export class EventObserverServer {
             err,
             `Error processing event http POST payload: ${eventPath}, len: ${contentLength}`
           );
-          res.writeHead(500);
-          res.end(`500: ${err}`);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error during message processing');
           logResponse(500);
         }
       });
@@ -283,7 +283,7 @@ export class EventObserverServer {
         err,
         `Error reading event http POST payload: ${eventPath}, len: ${contentLength}`
       );
-      res.writeHead(500);
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end('Internal Server Error during message reading');
       logResponse(500);
     });

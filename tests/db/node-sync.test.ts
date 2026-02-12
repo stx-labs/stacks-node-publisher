@@ -58,7 +58,7 @@ describe('Node synchronization', () => {
         // Would start at block 495, which has a missing parent
         startAtMsgId: BLOCK_495.sequenceNumber,
       })
-    ).rejects.toThrow(/Rejecting block 495/);
+    ).rejects.toThrow();
     const lastBlock = await env.db.getLastIngestedBlockIdentifier();
     assert(lastBlock);
     // Should still be on the last block we ingested

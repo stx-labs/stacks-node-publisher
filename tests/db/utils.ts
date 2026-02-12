@@ -77,6 +77,7 @@ export async function loadEventsDump(
   // Suppress noisy logs during bulk insertion
   const spyInfoLogs = [
     jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}),
+    jest.spyOn(eventServer.logger, 'debug').mockImplementation(() => {}),
     jest.spyOn(redisBroker.logger, 'info').mockImplementation(() => {}),
     jest.spyOn(redisBroker.logger, 'debug').mockImplementation(() => {}),
   ];

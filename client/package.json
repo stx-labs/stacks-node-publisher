@@ -1,6 +1,6 @@
 {
   "name": "@stacks/node-publisher-client",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "A client to consume Stacks events from the Stacks Node Publisher service",
   "main": "./dist/index.js",
   "typings": "./dist/index.d.ts",

@@ -17,21 +17,21 @@ describe('Stream position lookup', () => {
   // Sample block data from the dump (sequence_number, block_height, index_block_hash)
   // These are extracted from stackerdb-sample-events.tsv.gz
   const FIRST_BLOCK = {
-    sequenceNumber: '61',
+    sequenceNumber: '1270',
     blockHeight: 126,
     indexBlockHash: '0x6507aa0aa730292a6d8a2866cb860fea91b2b1372272e0191eb8252416f86922',
   };
   const MID_BLOCK = {
-    sequenceNumber: '5284',
+    sequenceNumber: '4992',
     blockHeight: 494,
     indexBlockHash: '0xfc67a86714b6af60ac6dd5cee5fc20303804b0e6c8c85bc641307a3bd1482dff',
   };
   const LAST_BLOCK = {
-    sequenceNumber: '5396',
+    sequenceNumber: '5100',
     blockHeight: 505,
     indexBlockHash: '0x1769ac7ebbff5a6995528cf9c72eed235337a2aa382cddfc0e1e3b85f08b97c6',
   };
-  const LAST_SEQUENCE_NUMBER = '5402';
+  const LAST_SEQUENCE_NUMBER = '5107';
   // Non-existent block hash for testing
   const NON_EXISTENT_BLOCK_HASH =
     '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -279,7 +279,7 @@ describe('Stream position lookup', () => {
 
     test('starts from exact position when valid messageId provided', async () => {
       await testWithFailCb(async fail => {
-        const startingSeqNum = '3000';
+        const startingSeqNum = MID_BLOCK.sequenceNumber;
         const client = await createTestClient(null, '*', error => fail(error));
 
         const firstMsgWaiter = waiter<string>();
@@ -296,7 +296,7 @@ describe('Stream position lookup', () => {
           }
         );
 
-        const receivedId = await withTimeout(firstMsgWaiter, 30_000);
+        const receivedId = await withTimeout(firstMsgWaiter, 10_000);
         // Should start after the specified message ID
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
         expect(receivedSeqNum).toBe(parseInt(startingSeqNum) + 1);

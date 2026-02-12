@@ -29,7 +29,6 @@ A store-and-stream service for Stacks blockchain events. Stacks Node Publisher p
 | Attachments | `/attachments/new` | Attachment data (legacy) |
 
 ### High Availability
-- **Multi-node support**: Connect multiple Stacks nodes for redundancy
 - **Automatic failover**: Consumers reconnect and resume seamlessly
 - **Backpressure handling**: Built-in flow control prevents memory exhaustion
 - **Idle client pruning**: Automatic cleanup of stale consumer connections

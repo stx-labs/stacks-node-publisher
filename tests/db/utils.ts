@@ -22,6 +22,10 @@ export type IntegrationTestEnv = {
 export async function setupIntegrationTestEnv(options?: {
   /** Path to a .tsv.gz dump file to load into the database */
   dumpFile?: string;
+  /** Skip all events in the dump file before this message ID (inclusive — this is the first event ingested) */
+  dumpStartAtMsgId?: string;
+  /** Stop ingestion at this message ID (inclusive — this is the last event ingested) */
+  dumpStopAtMsgId?: string;
 }): Promise<IntegrationTestEnv> {
   const db = await PgStore.connect();
 
@@ -37,7 +41,10 @@ export async function setupIntegrationTestEnv(options?: {
   await eventServer.start({ port: 0, host: '127.0.0.1' });
 
   if (options?.dumpFile) {
-    await loadEventsDump(eventServer, redisBroker, options.dumpFile);
+    await loadEventsDump(eventServer, redisBroker, options.dumpFile, {
+      startAtMsgId: options.dumpStartAtMsgId,
+      stopAtMsgId: options.dumpStopAtMsgId,
+    });
   }
 
   return { db, redisBroker, eventServer };
@@ -57,10 +64,11 @@ export async function teardownIntegrationTestEnv(env: IntegrationTestEnv): Promi
 /**
  * Loads a .tsv.gz events dump file into the event server.
  */
-async function loadEventsDump(
+export async function loadEventsDump(
   eventServer: EventObserverServer,
   redisBroker: RedisBroker,
-  dumpFile: string
+  dumpFile: string,
+  range?: { startAtMsgId?: string; stopAtMsgId?: string }
 ): Promise<void> {
   const rl = readline.createInterface({
     input: fs.createReadStream(dumpFile).pipe(zlib.createGunzip()),
@@ -69,17 +77,31 @@ async function loadEventsDump(
   // Suppress noisy logs during bulk insertion
   const spyInfoLogs = [
     jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}),
+    jest.spyOn(eventServer.logger, 'debug').mockImplementation(() => {}),
     jest.spyOn(redisBroker.logger, 'info').mockImplementation(() => {}),
+    jest.spyOn(redisBroker.logger, 'debug').mockImplementation(() => {}),
   ];
+  let skipping = !!range?.startAtMsgId;
   for await (const line of rl) {
-    const [_id, timestamp, path, payload] = line.split('\t');
+    const [id, timestamp, path, payload] = line.split('\t');
+    if (skipping) {
+      if (id === range!.startAtMsgId) {
+        skipping = false;
+      } else {
+        continue;
+      }
+    }
     const res = await fetch(eventServer.url + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Original-Timestamp': timestamp },
       body: payload,
     });
     if (res.status !== 200) {
-      throw new Error(`Failed to POST event: ${path} - ${payload.slice(0, 100)}`);
+      const msg = await res.text();
+      throw new Error(`Failed to POST event ${path}: ${msg}`);
+    }
+    if (range?.stopAtMsgId && id === range.stopAtMsgId) {
+      break;
     }
   }
   rl.close();

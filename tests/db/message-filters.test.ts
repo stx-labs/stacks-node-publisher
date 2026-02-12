@@ -23,92 +23,78 @@ describe('Message filters', () => {
     await teardownIntegrationTestEnv(env);
   });
 
-  describe('stream messages filtered by stream type', () => {
-    test('chain events', async () => {
-      await testWithFailCb(async fail => {
-        const lastDbMsg = await env.db.getLastMessage();
-        assert(lastDbMsg);
-        const client = await createTestClient(
-          undefined,
-          [
-            MessagePath.NewBlock,
-            MessagePath.NewBurnBlock,
-            MessagePath.NewMempoolTx,
-            MessagePath.DropMempoolTx,
-            MessagePath.NewMicroblocks,
-            MessagePath.AttachmentsNew,
-          ],
-          error => {
-            fail(error);
-          }
-        );
-        const allMsgsReceivedWaiter = waiter();
-
-        let messagesReceived = 0;
-        client.start(
-          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
-          async (id: string, _timestamp: string, message: Message) => {
-            messagesReceived++;
-            if (id === '5399-0') {
-              allMsgsReceivedWaiter.finish();
-            }
-            if (
-              message.path === MessagePath.StackerDbChunks ||
-              message.path === MessagePath.ProposalResponse
-            ) {
-              fail(new Error(`Unexpected message received: ${message.path}`));
-            }
-            return Promise.resolve();
-          }
-        );
-
-        await withTimeout(allMsgsReceivedWaiter, 60_000);
-        assert.equal(messagesReceived, 1430);
-
-        await client.stop();
+  test('no filter sends all messages', async () => {
+    await testWithFailCb(async fail => {
+      const lastDbMsg = await env.db.getLastMessage();
+      assert(lastDbMsg);
+      const client = await createTestClient(null, '*', error => {
+        fail(error);
       });
-    }, 60_000);
 
-    test('confirmed chain events', async () => {
-      await testWithFailCb(async fail => {
-        const lastDbMsg = await env.db.getLastMessage();
-        assert(lastDbMsg);
-        const client = await createTestClient(
-          undefined,
-          [MessagePath.NewBlock, MessagePath.NewBurnBlock],
-          error => {
-            fail(error);
+      let messagesReceived = 0;
+      const lastMsgId = waiter();
+      client.start(
+        async () => Promise.resolve(null),
+        async (id: string) => {
+          messagesReceived++;
+          if (id === `${lastDbMsg.sequence_number}-0`) {
+            lastMsgId.finish();
           }
-        );
-        const allMsgsReceivedWaiter = waiter();
+          return Promise.resolve();
+        }
+      );
 
-        let messagesReceived = 0;
-        client.start(
-          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
-          async (id: string, _timestamp: string, message: Message) => {
-            messagesReceived++;
-            if (id === '5396-0') {
-              allMsgsReceivedWaiter.finish();
-            }
-            if (
-              message.path === MessagePath.StackerDbChunks ||
-              message.path === MessagePath.ProposalResponse ||
-              message.path === MessagePath.NewMempoolTx ||
-              message.path === MessagePath.DropMempoolTx ||
-              message.path === MessagePath.NewMicroblocks ||
-              message.path === MessagePath.AttachmentsNew
-            ) {
-              fail(new Error(`Unexpected message received: ${message.path}`));
-            }
-            return Promise.resolve();
+      await withTimeout(lastMsgId, 10_000);
+      const countRes = await env.db.sql<
+        { count: string }[]
+      >`SELECT COUNT(*) AS count FROM messages`;
+      assert.equal(parseInt(countRes[0].count), messagesReceived);
+
+      await client.stop();
+    });
+  }, 10_000);
+
+  test('filter excludes signer messages', async () => {
+    await testWithFailCb(async fail => {
+      const client = await createTestClient(
+        null,
+        [
+          MessagePath.NewBlock,
+          MessagePath.NewBurnBlock,
+          MessagePath.NewMempoolTx,
+          MessagePath.DropMempoolTx,
+          MessagePath.NewMicroblocks,
+          MessagePath.AttachmentsNew,
+        ],
+        error => {
+          fail(error);
+        }
+      );
+
+      let messagesReceived = 0;
+      const lastMsgId = waiter();
+      client.start(
+        async () => Promise.resolve(null),
+        async (id: string, _timestamp: string, message: Message) => {
+          messagesReceived++;
+          if (
+            message.path === MessagePath.StackerDbChunks ||
+            message.path === MessagePath.ProposalResponse
+          ) {
+            fail(new Error(`Unexpected message received: ${message.path}`));
           }
-        );
+          // Corresponds to the last mempool tx message in the dump file
+          if (id === `5103-0`) {
+            lastMsgId.finish();
+          }
+          return Promise.resolve();
+        }
+      );
 
-        await withTimeout(allMsgsReceivedWaiter, 60_000);
-        assert.equal(messagesReceived, 983);
+      await withTimeout(lastMsgId, 10_000);
+      assert.equal(messagesReceived, 1135);
 
-        await client.stop();
-      });
-    }, 60_000);
-  });
+      await client.stop();
+    });
+  }, 10_000);
 });

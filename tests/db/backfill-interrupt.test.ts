@@ -365,10 +365,9 @@ describe('Backfill tests', () => {
 
       const backfillHit = waiter();
       const onBackfill = redisBroker._testHooks!.onPgBackfillLoop.register(async _msgId => {
-        const perConsumerClient = [...redisBroker.perConsumerClients].find(
-          ([_, entry]) => entry.clientId === client.clientId
-        )?.[0];
-        assert(perConsumerClient);
+        const perConsumerEntry = redisBroker.consumerClients.get(client.clientId);
+        assert(perConsumerEntry);
+        const perConsumerClient = perConsumerEntry.client;
         const perConsumerClientRedisConnectionID = await perConsumerClient.clientId();
         const clientKillCount = await redisBroker.client.clientKill({
           filter: 'ID',

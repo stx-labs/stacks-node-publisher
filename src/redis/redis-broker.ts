@@ -41,6 +41,8 @@ type StacksClientConnection = StacksClient & {
   chainTipStreamGroupKey: string;
   chainTipStreamConsumerKey: string;
   lastStreamedSequenceNumber: string;
+  /** Combined abort signal that fires on either global shutdown or per-client prune. */
+  abortSignal: AbortSignal;
 };
 
 /**
@@ -80,7 +82,7 @@ export class RedisBroker {
   client: RedisClient;
   ingestionClient: RedisClient;
   listeningClient: RedisClient;
-  perConsumerClients = new Map<RedisClient, { clientId: string }>();
+  consumerClients = new Map<string, { client: RedisClient; abortController: AbortController }>();
   readonly logger = defaultLogger.child({ module: 'RedisBroker' });
 
   readonly redisStreamKeyPrefix: string;
@@ -253,7 +255,7 @@ export class RedisBroker {
       }
     });
     await Promise.all(
-      [...this.perConsumerClients].map(([client]) =>
+      [...this.consumerClients.values()].map(({ client }) =>
         closeRedisClient(client).catch((error: unknown) => {
           if (!(error instanceof ClientClosedError)) {
             this.logger.debug(error, 'Error closing per-consumer redis client connection');
@@ -406,7 +408,11 @@ export class RedisBroker {
             disableOfflineQueue: true,
           });
 
-          this.perConsumerClients.set(dedicatedClient, { clientId });
+          const clientAbortController = new AbortController();
+          this.consumerClients.set(clientId, {
+            client: dedicatedClient,
+            abortController: clientAbortController,
+          });
           this.events.emit('perConsumerClientCreated', { clientId });
 
           dedicatedClient.on('error', (err: Error) => {
@@ -425,10 +431,10 @@ export class RedisBroker {
           // any errors won't make us lose this connection request.
           await listeningClient.xDel(connectionStreamKey, msgId);
 
-          // Serve the client by creating the consumer group and backfilling messages from postgres.
           void this.streamMessagesToClient(
             { client: dedicatedClient, appName, clientId, selectedPaths },
             startSequenceNumber,
+            clientAbortController,
             logger
           )
             .catch(async (error: unknown) => {
@@ -456,7 +462,7 @@ export class RedisBroker {
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
-              this.perConsumerClients.delete(dedicatedClient);
+              this.consumerClients.delete(clientId);
               closeRedisClient(dedicatedClient).catch((error: unknown) => {
                 if (!this.abortController.signal.aborted) {
                   logger.warn(error as Error, `Error closing dedicated client connection`);
@@ -493,20 +499,27 @@ export class RedisBroker {
   async streamMessagesToClient(
     stacksClient: StacksClient,
     startSequenceNumber: string,
+    clientAbortController: AbortController,
     logger: typeof this.logger
   ) {
     await stacksClient.client.connect();
+    // Combined signal fires on either global shutdown or per-client prune
+    const abortSignal = AbortSignal.any([
+      this.abortController.signal,
+      clientAbortController.signal,
+    ]);
     const conn: StacksClientConnection = {
       ...stacksClient,
       clientStreamKey: this.getClientStreamKey(stacksClient.clientId),
       chainTipStreamGroupKey: this.getClientChainTipStreamGroupKey(stacksClient.clientId),
       chainTipStreamConsumerKey: `${this.redisStreamKeyPrefix}consumer:${stacksClient.clientId}`,
       lastStreamedSequenceNumber: startSequenceNumber,
+      abortSignal,
     };
 
     // Cycles a client between postgres backfill (Phase 1) and chain tip live streaming (Phase 2).
     // A client can be demoted from live streaming back to backfill if it falls behind.
-    while (!this.abortController.signal.aborted) {
+    while (!conn.abortSignal.aborted) {
       // ═══════════════════════════════════════════════════════════════════════════════
       // PHASE 1: Backfill from Postgres
       // ═══════════════════════════════════════════════════════════════════════════════
@@ -612,7 +625,7 @@ export class RedisBroker {
   ): Promise<{ chainTipConsumerGroupCreated: boolean }> {
     let chainTipConsumerGroupCreated = false;
 
-    while (!this.abortController.signal.aborted) {
+    while (!conn.abortSignal.aborted) {
       if (this._testHooks) {
         for (const cb of this._testHooks.onBeforePgBackfillQuery) {
           await cb(conn.lastStreamedSequenceNumber);
@@ -628,7 +641,7 @@ export class RedisBroker {
           batchSize: ENV.DB_MSG_BATCH_SIZE,
           cursorSize: ENV.DB_MSG_CURSOR_SIZE,
         })) {
-          if (this.abortController.signal.aborted) break;
+          if (conn.abortSignal.aborted) break;
 
           processedRows += rows.length;
           firstSequenceNumber ??= rows[0].sequence_number;
@@ -721,7 +734,7 @@ export class RedisBroker {
       }
 
       // Backpressure handling to avoid overwhelming redis memory
-      while (!this.abortController.signal.aborted) {
+      while (!conn.abortSignal.aborted) {
         const clientStreamLen = await conn.client.xLen(conn.clientStreamKey);
         if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
           break;
@@ -752,7 +765,7 @@ export class RedisBroker {
   ): Promise<{ demotedToBackfill: boolean }> {
     let demotedToBackfill = false;
 
-    while (!this.abortController.signal.aborted && !demotedToBackfill) {
+    while (!conn.abortSignal.aborted && !demotedToBackfill) {
       if (this._testHooks) {
         for (const cb of this._testHooks.onBeforeLivestreamXReadGroup) {
           await cb(conn.lastStreamedSequenceNumber);
@@ -798,7 +811,7 @@ export class RedisBroker {
         }
 
         // Backpressure handling
-        while (!this.abortController.signal.aborted) {
+        while (!conn.abortSignal.aborted) {
           const clientStreamLen = await conn.client.xLen(conn.clientStreamKey);
           if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
             break;
@@ -1024,9 +1037,17 @@ export class RedisBroker {
    * This allows for graceful degradation without losing the client's stream state.
    */
   async pruneIdleClients() {
-    // Helper function to prune a client group and stream together.
+    // Helper function to abort any active serving task and prune a client group and stream.
     const prune = async (groupId: string, clientStreamKey: string): Promise<void> => {
       const clientId = clientStreamKey.split(':').at(-1) ?? '';
+      // Abort any active serving task so it stops recreating the stream via xAdd.
+      // The serving task will exit on its next loop iteration and clean up its
+      // dedicated Redis client in .finally(). The stream itself (if recreated by a
+      // final xAdd) will be caught on the next cleanup cycle with no active task left.
+      const activeEntry = this.consumerClients.get(clientId);
+      if (activeEntry) {
+        activeEntry.abortController.abort();
+      }
       await this.client
         .multi()
         .xGroupDestroy(this.chainTipStreamKey, groupId)
@@ -1057,7 +1078,7 @@ export class RedisBroker {
           const clientId = consumer.name.split(':').at(-1) ?? '';
           const clientStreamKey = this.getClientStreamKey(clientId);
           this.logger.info(
-            `Detected idle consumer group on chain tip stream, client: ${clientId}, idle ms: ${idleMs}`
+            `Pruning idle consumer group on chain tip stream, client: ${clientId}, idle ms: ${idleMs}`
           );
           await prune(group.name, clientStreamKey);
         }
@@ -1081,9 +1102,9 @@ export class RedisBroker {
 
       // Check for dangling streams with no consumers
       if (groups.length === 0 || groups[0].consumers.length === 0) {
-        this.logger.warn(`Dangling client stream ${clientStreamKey}`);
         const clientId = clientStreamKey.split(':').at(-1) ?? '';
         const groupId = this.getClientChainTipStreamGroupKey(clientId);
+        this.logger.warn(`Pruning dangling client stream ${clientStreamKey}`);
         await prune(groupId, clientStreamKey);
         continue;
       }
@@ -1105,7 +1126,6 @@ export class RedisBroker {
           if (idleMs > ENV.MAX_IDLE_TIME_MS) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientChainTipStreamGroupKey(clientId);
-
             this.logger.info(`Detected idle client stream ${clientId}, idle ms: ${idleMs}`);
             await prune(groupId, clientStreamKey);
           }

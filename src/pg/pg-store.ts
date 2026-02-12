@@ -32,6 +32,12 @@ export type StreamPositionResolution = {
   clampedToMax: boolean;
 };
 
+export type NewBlockInsertResult = {
+  action: 'write' | 'skip' | 'ignore' | 'reject';
+  sequence_number: string | null;
+  timestamp: string | null;
+};
+
 /**
  * The Postgres store for the Stacks Node Publisher service.
  */
@@ -94,13 +100,13 @@ export class PgStore extends BasePgStore {
   /**
    * Inserts a Stacks core message into the database.
    * @param eventPath - The path of the event.
-   * @param content - The JSON-encoded content of the event.
+   * @param content - The content of the event.
    * @param httpReceiveTimestamp - The timestamp of the event.
    * @returns The sequence number and timestamp of the inserted message.
    */
   public async insertMessage(
     eventPath: string,
-    content: string,
+    content: Record<string, unknown>,
     httpReceiveTimestamp: Date
   ): Promise<{ sequence_number: string; timestamp: string }> {
     if (this._testHooks) {
@@ -110,7 +116,7 @@ export class PgStore extends BasePgStore {
     }
     const insertQuery = await this.sql<{ sequence_number: string; timestamp: string }[]>`
       INSERT INTO messages (created_at, path, content)
-      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${JSON.parse(content)})
+      VALUES (${httpReceiveTimestamp}, ${eventPath}, ${content})
       RETURNING sequence_number, (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp
     `;
     if (insertQuery.length !== 1) {
@@ -118,6 +124,85 @@ export class PgStore extends BasePgStore {
     }
     const { sequence_number, timestamp } = insertQuery[0];
     return { sequence_number, timestamp };
+  }
+
+  /**
+   * Validates and conditionally inserts a `/new_block` message in a single query.
+   * Uses CTEs to check block continuity before inserting:
+   * - If DB has no blocks: writes (first block ever).
+   * - If `block_height` is 0 and DB has blocks: ignores (genesis block is harmless).
+   * - If `index_block_hash` already exists: skips (node is behind us).
+   * - If `parent_index_block_hash` exists: writes (normal continuation).
+   * - Otherwise: rejects (gap detected).
+   *
+   * @returns The action taken and, if written, the sequence number and timestamp.
+   */
+  public async insertNewBlockMessage(
+    eventPath: string,
+    content: Record<string, unknown>,
+    httpReceiveTimestamp: Date,
+    blockHeight: number,
+    indexBlockHash: string,
+    parentIndexBlockHash: string
+  ): Promise<NewBlockInsertResult> {
+    if (this._testHooks) {
+      for (const hook of this._testHooks.onMsgInserting) {
+        await hook();
+      }
+    }
+    const result = await this.sql<NewBlockInsertResult[]>`
+      WITH checks AS (
+        SELECT
+          EXISTS(
+            SELECT 1 FROM messages
+            WHERE path = '/new_block'
+              AND content->>'index_block_hash' = ${indexBlockHash}
+          ) AS block_exists,
+          EXISTS(
+            SELECT 1 FROM messages
+            WHERE path = '/new_block'
+              AND content->>'index_block_hash' = ${parentIndexBlockHash}
+          ) AS parent_exists,
+          EXISTS(
+            SELECT 1 FROM messages
+            WHERE path = '/new_block'
+            LIMIT 1
+          ) AS has_blocks
+      ),
+      decision AS (
+        SELECT
+          CASE
+            WHEN ${blockHeight} = 0 THEN
+              CASE WHEN NOT has_blocks THEN 'write' ELSE 'ignore' END
+            WHEN block_exists THEN 'skip'
+            WHEN NOT has_blocks THEN 'write'
+            WHEN parent_exists THEN 'write'
+            ELSE 'reject'
+          END AS action
+        FROM checks
+      ),
+      inserted AS (
+        INSERT INTO messages (created_at, path, content)
+        SELECT ${httpReceiveTimestamp}, ${eventPath}, ${content}
+        WHERE (SELECT action FROM decision) = 'write'
+        RETURNING sequence_number,
+                  (EXTRACT(EPOCH FROM created_at) * 1000)::BIGINT AS timestamp
+      )
+      SELECT
+        d.action,
+        i.sequence_number,
+        i.timestamp
+      FROM decision d
+      LEFT JOIN inserted i ON true
+    `;
+    if (result.count !== 1) {
+      throw new Error('Expected a single row to be returned from new block insert');
+    }
+    return {
+      action: result[0].action,
+      sequence_number: result[0].sequence_number,
+      timestamp: result[0].timestamp,
+    };
   }
 
   /**
@@ -178,6 +263,24 @@ export class PgStore extends BasePgStore {
       return null;
     }
     return dbResults[0];
+  }
+
+  /**
+   * For testing purposes, returns the last ingested block identifier (index block hash and block
+   * height).
+   */
+  public async getLastIngestedBlockIdentifier(): Promise<{
+    index_block_hash: string;
+    block_height: number;
+  } | null> {
+    const dbResults = await this.sql<{ index_block_hash: string; block_height: number }[]>`
+      SELECT content->>'index_block_hash' AS index_block_hash, (content->>'block_height')::int AS block_height
+      FROM messages
+      WHERE path = '/new_block'
+      ORDER BY sequence_number DESC
+      LIMIT 1
+    `;
+    return dbResults[0] ?? null;
   }
 
   /**

@@ -16,6 +16,13 @@ export class EventObserverServer {
   readonly db: PgStore;
   readonly redisBroker: RedisBroker;
 
+  /**
+   * When `true`, all incoming messages are silently skipped until the next new block arrives. This
+   * flag is activated if we start receiving old messages, indicating the Stacks node is still
+   * catching up to us.
+   */
+  private skipMessages = false;
+
   constructor(args: { db: PgStore; redisBroker: RedisBroker; promRegistry: Registry }) {
     this.promRegistry = args.promRegistry;
     this.promMetrics = this.setupPromMetrics();
@@ -29,22 +36,78 @@ export class EventObserverServer {
     eventBody: string,
     httpReceiveTimestamp: Date
   ): Promise<void> {
-    // Storing the event in postgres is critical, if this fails then throw so the observer server
-    // returns a non-200 and the stacks-node will retry the event POST.
-    const dbResult = await this.db.insertMessage(eventPath, eventBody, httpReceiveTimestamp);
-    // TODO: This should be fire-and-forget into a serialized promise queue, because writing the event
-    // to redis is not critical and we don't want to slow down the event observer server & pg writes.
-    // For example, even if redis takes a few hundred milliseconds, we don't want to block the
-    // stacks-node(s) for any longer than absolutely necessary. This especially important during genesis
-    // syncs and also for the high-precision stackerdb_chunk event timestamps used by clients like
-    // the signer-metrics-api.
-    // The promise queue should be limited to 1 concurrency to ensure the order of events is maintained,
-    // and should have a reasonable max queue length to prevent memory exhaustion. If the limit is reached
-    // then the redis write will just be skipped for this message, and the redis-broker layer already knows
-    // how to handle this case (e.g. detecting msg gaps and backfilling from postgres).
+    const jsonBody = JSON.parse(eventBody) as Record<string, unknown>;
+    let timestamp: string | undefined;
+    let sequenceNumber: string | undefined;
+
+    if (eventPath === '/new_block') {
+      const blockHeight = jsonBody.block_height as number;
+      const indexBlockHash = jsonBody.index_block_hash as string;
+      const parentIndexBlockHash = jsonBody.parent_index_block_hash as string;
+
+      const result = await this.db.insertNewBlockMessage(
+        eventPath,
+        jsonBody,
+        httpReceiveTimestamp,
+        blockHeight,
+        indexBlockHash,
+        parentIndexBlockHash
+      );
+      switch (result.action) {
+        case 'write': {
+          if (this.skipMessages) {
+            this.logger.info(`Resuming event ingestion at block ${blockHeight} ${indexBlockHash}`);
+            this.skipMessages = false;
+          }
+          if (!result.sequence_number || !result.timestamp) {
+            throw new Error('Expected sequence_number and timestamp for written block');
+          }
+          timestamp = result.timestamp;
+          sequenceNumber = result.sequence_number;
+          break;
+        }
+        case 'skip': {
+          this.logger.info(`Skipping previously ingested block ${blockHeight} ${indexBlockHash}`);
+          this.skipMessages = true;
+          return;
+        }
+        case 'ignore': {
+          this.logger.info('Ignoring extra genesis block (height 0)');
+          return;
+        }
+        case 'reject': {
+          const message = `Rejecting block ${blockHeight} ${indexBlockHash}: parent block ${parentIndexBlockHash} not found`;
+          this.logger.error(message);
+          throw new Error(message);
+        }
+      }
+    } else {
+      if (this.skipMessages) {
+        this.logger.info(`Skipping ${eventPath} message, node still catching up`);
+        return;
+      }
+      // Storing the event in postgres is critical, if this fails then throw so the observer server
+      // returns a non-200 and the stacks-node will retry the event POST.
+      const dbResult = await this.db.insertMessage(eventPath, jsonBody, httpReceiveTimestamp);
+      timestamp = dbResult.timestamp;
+      sequenceNumber = dbResult.sequence_number;
+    }
+
+    // TODO: This should be fire-and-forget into a serialized promise queue, because writing the
+    // event to redis is not critical and we don't want to slow down the event observer server & pg
+    // writes. For example, even if redis takes a few hundred milliseconds, we don't want to block
+    // the stacks-node(s) for any longer than absolutely necessary. This especially important during
+    // genesis syncs and also for the high-precision stackerdb_chunk event timestamps used by
+    // clients like the signer-metrics-api.
+    //
+    // The promise queue should be limited to 1 concurrency to ensure the order of events is
+    // maintained, and should have a reasonable max queue length to prevent memory exhaustion. If
+    // the limit is reached then the redis write will just be skipped for this message, and the
+    // redis-broker layer already knows how to handle this case (e.g. detecting msg gaps and
+    // backfilling from postgres).
     await this.redisBroker.addStacksMessage({
-      timestamp: dbResult.timestamp,
-      sequenceNumber: dbResult.sequence_number,
+      timestamp,
+      sequenceNumber,
       eventPath,
       eventBody,
     });
@@ -201,7 +264,7 @@ export class EventObserverServer {
             `Error processing event http POST payload: ${eventPath}, len: ${contentLength}`
           );
           res.writeHead(500);
-          res.end('Internal Server Error during message processing');
+          res.end(`500: ${err}`);
           logResponse(500);
         }
       });

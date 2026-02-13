@@ -1128,11 +1128,17 @@ export class RedisBroker {
         for (const consumer of group.consumers) {
           const refTime = consumer.activeTime > 0 ? consumer.activeTime : consumer.seenTime;
           const inactiveMs = Date.now() - refTime;
-          if (inactiveMs > ENV.MAX_IDLE_TIME_MS) {
+          // If the consumer has pending (unacknowledged) messages, it may still be actively
+          // processing them slowly. Use a much higher threshold to tolerate slow consumers while
+          // still eventually pruning crashed clients that left orphaned pending entries.
+          const idleThreshold =
+            consumer.pelCount > 0 ? ENV.MAX_STUCK_TIME_MS : ENV.MAX_IDLE_TIME_MS;
+          if (inactiveMs > idleThreshold) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientChainTipStreamGroupKey(clientId);
+            const reason = consumer.pelCount > 0 ? 'stalled' : 'idle';
             this.logger.info(
-              `Detected inactive client stream ${clientId}, inactive ms: ${inactiveMs}`
+              `Pruning ${reason} client stream ${clientId} after ${(inactiveMs * 1000).toFixed(3)}s`
             );
             await prune(groupId, clientStreamKey);
           }

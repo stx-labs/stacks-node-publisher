@@ -106,6 +106,8 @@ export class StacksMessageStream {
 
   readonly events = new EventEmitter<{
     redisConsumerGroupDestroyed: [];
+    connectionAnnounced: [{ clientId: string }];
+    noMessageTimeoutReconnect: [{ clientId: string }];
     msgReceived: [{ id: string }];
   }>();
 
@@ -271,6 +273,7 @@ export class StacksMessageStream {
         MKSTREAM: true,
       })
       .exec();
+    this.events.emit('connectionAnnounced', { clientId: this.clientId });
 
     // Start reading messages from the stream.
     let lastMessageTime = Date.now();
@@ -296,6 +299,7 @@ export class StacksMessageStream {
         if (this.noMessageTimeoutMs > 0) {
           const elapsed = Date.now() - lastMessageTime;
           if (elapsed > this.noMessageTimeoutMs) {
+            this.events.emit('noMessageTimeoutReconnect', { clientId: this.clientId });
             throw new Error(
               `No messages received for ${elapsed}ms (timeout: ${this.noMessageTimeoutMs}ms), reconnecting`
             );

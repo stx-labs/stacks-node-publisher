@@ -1117,6 +1117,10 @@ export class RedisBroker {
       // actually delivered) instead of `seenTime` (last time any command was issued) because the
       // client's `XREADGROUP BLOCK` calls continuously refresh `seenTime` even when the stream is
       // empty/orphaned, which would prevent detection of starved consumers.
+      // When `activeTime` is -1 (consumer has never received a message), we fall back to `seenTime`
+      // to avoid immediately pruning newly created consumers that haven't received their first
+      // message yet. The client-side no-message timeout handles the case where a consumer never
+      // receives any messages at all.
       for (const group of groups) {
         if (group.consumers.length > 1) {
           this.logger.error(
@@ -1124,7 +1128,8 @@ export class RedisBroker {
           );
         }
         for (const consumer of group.consumers) {
-          const inactiveMs = Date.now() - consumer.activeTime;
+          const refTime = consumer.activeTime > 0 ? consumer.activeTime : consumer.seenTime;
+          const inactiveMs = Date.now() - refTime;
           if (inactiveMs > ENV.MAX_IDLE_TIME_MS) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientChainTipStreamGroupKey(clientId);

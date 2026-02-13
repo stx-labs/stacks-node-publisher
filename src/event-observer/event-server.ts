@@ -35,7 +35,9 @@ export class EventObserverServer {
     eventPath: string,
     eventBody: string,
     httpReceiveTimestamp: Date
-  ): Promise<void> {
+  ): Promise<string> {
+    let resultMessage = '';
+
     // Messages are parsed into a JSON object for validation and to make sure they are stored as
     // JSONB in the database.
     const jsonBody = JSON.parse(eventBody) as Record<string, unknown>;
@@ -49,7 +51,7 @@ export class EventObserverServer {
       const indexBlockHash = jsonBody.index_block_hash as string;
       const parentIndexBlockHash = jsonBody.parent_index_block_hash as string;
 
-      const result = await this.db.insertNewBlockMessage(
+      const blockResult = await this.db.insertNewBlockMessage(
         eventPath,
         jsonBody,
         httpReceiveTimestamp,
@@ -57,7 +59,7 @@ export class EventObserverServer {
         indexBlockHash,
         parentIndexBlockHash
       );
-      switch (result.action) {
+      switch (blockResult.action) {
         case 'write': {
           if (this.skipMessages) {
             this.logger.info(
@@ -65,23 +67,20 @@ export class EventObserverServer {
             );
             this.skipMessages = false;
           }
-          if (!result.sequence_number || !result.timestamp) {
+          if (!blockResult.sequence_number || !blockResult.timestamp) {
             throw new Error('Expected sequence_number and timestamp for written block');
           }
-          timestamp = result.timestamp;
-          sequenceNumber = result.sequence_number;
+          timestamp = blockResult.timestamp;
+          sequenceNumber = blockResult.sequence_number;
+          resultMessage = `Inserted ${eventPath} message with seq ${sequenceNumber}, block ${blockHeight} ${indexBlockHash}`;
           break;
         }
         case 'skip': {
-          this.logger.info(
-            `Repeated block detected at ${blockHeight} ${indexBlockHash}, entering 'skip' mode until Stacks node catches up`
-          );
           this.skipMessages = true;
-          return;
+          return `Repeated block detected at ${blockHeight} ${indexBlockHash}, skipping until Stacks node catches up`;
         }
         case 'ignore': {
-          this.logger.info('Ignoring repeated genesis block (height 0)');
-          return;
+          return `Ignoring repeated genesis block (height 0)`;
         }
         case 'reject': {
           const message = `Rejecting block ${blockHeight} ${indexBlockHash}: parent block ${parentIndexBlockHash} not found`;
@@ -91,14 +90,14 @@ export class EventObserverServer {
       }
     } else {
       if (this.skipMessages) {
-        this.logger.debug(`Skipping ${eventPath} message, node still catching up`);
-        return;
+        return `Skipping ${eventPath} message, Stacks node still catching up`;
       }
       // Storing the event in postgres is critical, if this fails then throw so the observer server
       // returns a non-200 and the stacks-node will retry the event POST.
       const dbResult = await this.db.insertMessage(eventPath, jsonBody, httpReceiveTimestamp);
       timestamp = dbResult.timestamp;
       sequenceNumber = dbResult.sequence_number;
+      resultMessage = `Inserted ${eventPath} message with seq ${sequenceNumber}`;
     }
 
     // TODO: This should be fire-and-forget into a serialized promise queue, because writing the
@@ -119,6 +118,7 @@ export class EventObserverServer {
       eventPath,
       eventBody,
     });
+    return resultMessage;
   }
 
   get url(): string {
@@ -226,7 +226,7 @@ export class EventObserverServer {
       `Received event POST request: ${req.url}, len: ${contentLength}`
     );
 
-    const logResponse = (statusCode: number) => {
+    const logResponse = (statusCode: number, resultMessage?: string) => {
       const duration = process.hrtime(startTime);
       const durationInSeconds = duration[0] + duration[1] / 1e9;
       this.logger.info(
@@ -237,7 +237,7 @@ export class EventObserverServer {
           responseTime: durationInSeconds,
           contentLength: contentLength,
         },
-        'request completed'
+        `Request completed${resultMessage ? `: ${resultMessage}` : ''}`
       );
       const labels = {
         method: method,
@@ -262,10 +262,10 @@ export class EventObserverServer {
       // Body has been fully received
       void this.queue.add(async () => {
         try {
-          await this.eventMessageHandler(eventPath, body, httpReceiveTimestamp);
+          const result = await this.eventMessageHandler(eventPath, body, httpReceiveTimestamp);
           res.writeHead(200, { 'Content-Type': 'text/plain' });
           res.end('Received successfully!');
-          logResponse(200);
+          logResponse(200, result);
         } catch (err) {
           this.logger.error(
             err,

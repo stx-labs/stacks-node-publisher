@@ -72,7 +72,7 @@ export class EventObserverServer {
           }
           timestamp = blockResult.timestamp;
           sequenceNumber = blockResult.sequence_number;
-          resultMessage = `Inserted ${eventPath} message with seq ${sequenceNumber}, block ${blockHeight} ${indexBlockHash}`;
+          resultMessage = `Inserted ${eventPath} message, seq: ${sequenceNumber}, block: ${blockHeight} ${indexBlockHash}`;
           break;
         }
         case 'skip': {
@@ -97,7 +97,7 @@ export class EventObserverServer {
       const dbResult = await this.db.insertMessage(eventPath, jsonBody, httpReceiveTimestamp);
       timestamp = dbResult.timestamp;
       sequenceNumber = dbResult.sequence_number;
-      resultMessage = `Inserted ${eventPath} message with seq ${sequenceNumber}`;
+      resultMessage = `Inserted ${eventPath} message, seq: ${sequenceNumber}`;
     }
 
     // TODO: This should be fire-and-forget into a serialized promise queue, because writing the
@@ -237,7 +237,7 @@ export class EventObserverServer {
           responseTime: durationInSeconds,
           contentLength: contentLength,
         },
-        `Request completed${resultMessage ? `: ${resultMessage}` : ''}`
+        `Request completed${resultMessage ? `: ${resultMessage}` : ''} in ${durationInSeconds.toFixed(3)}s`
       );
       const labels = {
         method: method,

@@ -401,7 +401,6 @@ export class RedisBroker {
               : '*';
           this.logger.info(msgPayload, `New client connection: ${clientId}, app: ${appName}`);
 
-          // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at once
           const logger = this.logger.child({ clientId, appName });
           const dedicatedClient = this.client.duplicate({
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
@@ -431,6 +430,9 @@ export class RedisBroker {
           // any errors won't make us lose this connection request.
           await listeningClient.xDel(connectionStreamKey, msgId);
 
+          // Fire-and-forget promise so multiple clients can connect and backfill and live-stream at
+          // once. This also ensures that if the client connection is closed, the promise will be
+          // rejected and the client will be cleaned up.
           void this.streamMessagesToClient(
             { client: dedicatedClient, appName, clientId, selectedPaths },
             startSequenceNumber,
@@ -533,15 +535,12 @@ export class RedisBroker {
         conn,
         logger
       );
+      if (conn.abortSignal.aborted) break;
 
       // If the chain tip stream consumer group was not created yet (chain tip stream didn't exist
       // or was empty during backfill), create it now at '$' to start receiving new messages
       if (!chainTipConsumerGroupCreated) {
-        logger.info(
-          { appName: stacksClient.appName, clientId: stacksClient.clientId },
-          `Postgres backfill complete. Creating consumer group at '$' (no overlap needed) for client starting at sequence ${conn.lastStreamedSequenceNumber}`
-        );
-        await this.createClientChainTipStreamConsumerGroup(conn);
+        await this.createClientChainTipStreamConsumerGroup(conn, logger);
         this.events.emit('consumerPromotedToLiveStream', { clientId: conn.clientId });
       }
 
@@ -561,14 +560,13 @@ export class RedisBroker {
         `Starting live streaming for client at msg ID ${conn.lastStreamedSequenceNumber}`
       );
       const { demotedToBackfill } = await this.feedClientStreamFromChainTipStream(conn, logger);
-      // If we exited the live streaming loop without being demoted, we're shutting down
-      if (!demotedToBackfill) {
-        break;
+      if (conn.abortSignal.aborted) break;
+      if (demotedToBackfill) {
+        logger.info(
+          { appName: stacksClient.appName, clientId: stacksClient.clientId },
+          `Client demoted to backfill mode, resuming from sequence ${conn.lastStreamedSequenceNumber}`
+        );
       }
-      logger.info(
-        { appName: stacksClient.appName, clientId: stacksClient.clientId },
-        `Client demoted to backfill mode, resuming from sequence ${conn.lastStreamedSequenceNumber}`
-      );
     }
   }
 
@@ -580,8 +578,14 @@ export class RedisBroker {
    */
   private async createClientChainTipStreamConsumerGroup(
     conn: StacksClientConnection,
+    logger: typeof this.logger,
     startAtSequence?: string
   ) {
+    if (conn.abortSignal.aborted) return;
+    logger.info(
+      { appName: conn.appName, clientId: conn.clientId },
+      `Creating chain tip stream consumer group for client ${conn.clientId}, starting at sequence ${startAtSequence ? `${startAtSequence}-0` : '$'}`
+    );
     await conn.client
       .multi()
       .xGroupCreate(
@@ -663,18 +667,13 @@ export class RedisBroker {
         throw error;
       }
 
-      if (processedRows === 0) {
+      if (!conn.abortSignal.aborted && processedRows === 0) {
         logger.debug(
           { appName: conn.appName, clientId: conn.clientId },
           `Finished backfilling messages from postgres to client stream`
         );
         break;
       }
-
-      logger.debug(
-        { appName: conn.appName, clientId: conn.clientId },
-        `Queried ${processedRows} messages from postgres (messages ${firstSequenceNumber} to ${conn.lastStreamedSequenceNumber})`
-      );
 
       if (this._testHooks && firstSequenceNumber !== undefined) {
         for (const cb of this._testHooks.onPgBackfillLoop) {
@@ -698,14 +697,13 @@ export class RedisBroker {
           const firstEntryId = firstEntry ? parseInt(firstEntry.id.split('-')[0]) : 0;
 
           if (parseInt(conn.lastStreamedSequenceNumber) >= firstEntryId) {
-            // We've caught up with the chain tip stream - create consumer group now
-            logger.debug(
+            logger.info(
               { appName: conn.appName, clientId: conn.clientId },
-              `Backfill caught up with chain tip stream. lastBackfilled=${conn.lastStreamedSequenceNumber}, firstEntry=${firstEntryId}`
+              `Backfill caught up with chain tip stream at sequence ${conn.lastStreamedSequenceNumber} for client ${conn.clientId}`
             );
-
             await this.createClientChainTipStreamConsumerGroup(
               conn,
+              logger,
               conn.lastStreamedSequenceNumber
             );
             chainTipConsumerGroupCreated = true;

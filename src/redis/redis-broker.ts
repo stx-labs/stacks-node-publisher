@@ -1113,7 +1113,14 @@ export class RedisBroker {
         this.logger.error(`Multiple groups for client stream ${clientStreamKey}: ${groups.length}`);
       }
 
-      // Check for idle consumers on the client stream
+      // Check for idle consumers on the client stream. We use `activeTime` (last time a message was
+      // actually delivered) instead of `seenTime` (last time any command was issued) because the
+      // client's `XREADGROUP BLOCK` calls continuously refresh `seenTime` even when the stream is
+      // empty/orphaned, which would prevent detection of starved consumers.
+      // When `activeTime` is -1 (consumer has never received a message), we fall back to `seenTime`
+      // to avoid immediately pruning newly created consumers that haven't received their first
+      // message yet. The client-side no-message timeout handles the case where a consumer never
+      // receives any messages at all.
       for (const group of groups) {
         if (group.consumers.length > 1) {
           this.logger.error(
@@ -1121,12 +1128,14 @@ export class RedisBroker {
           );
         }
         for (const consumer of group.consumers) {
-          const idleMs = Date.now() - consumer.seenTime;
-
-          if (idleMs > ENV.MAX_IDLE_TIME_MS) {
+          const refTime = consumer.activeTime > 0 ? consumer.activeTime : consumer.seenTime;
+          const inactiveMs = Date.now() - refTime;
+          if (inactiveMs > ENV.MAX_IDLE_TIME_MS) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientChainTipStreamGroupKey(clientId);
-            this.logger.info(`Detected idle client stream ${clientId}, idle ms: ${idleMs}`);
+            this.logger.info(
+              `Detected inactive client stream ${clientId}, inactive ms: ${inactiveMs}`
+            );
             await prune(groupId, clientStreamKey);
           }
         }

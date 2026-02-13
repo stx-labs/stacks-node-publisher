@@ -55,13 +55,21 @@ export type SelectedMessagePaths = MessagePath[] | '*';
 export type StreamOptions = {
   /**
    * Message paths to include in a message stream, where `*` means client wants to receive all
-   * messages.
+   * messages. Defaults to `*`.
    */
   selectedMessagePaths?: SelectedMessagePaths;
   /**
-   * The batch size for the message stream.
+   * The batch size for the message stream. Controls how many messages are read from the stream at
+   * once. Defaults to 100.
    */
   batchSize?: number;
+  /**
+   * Maximum time in milliseconds to wait without receiving any messages before reconnecting. This
+   * prevents the client from spinning forever on an orphaned stream if the server restarts and
+   * fails to clean up the client's consumer group. Defaults to 120_000 (2 minutes). Set to 0 to
+   * disable.
+   */
+  noMessageTimeoutMs?: number;
 };
 
 /** Type for xReadGroup response entries (Redis v5) */
@@ -89,6 +97,7 @@ export class StacksMessageStream {
 
   private readonly logger = defaultLogger.child({ module: 'StacksMessageStream' });
   private readonly msgBatchSize: number;
+  private readonly noMessageTimeoutMs: number;
 
   /** For testing purposes only. The last message ID that was processed by this client. */
   public lastProcessedMessageId: string = '0-0';
@@ -97,6 +106,8 @@ export class StacksMessageStream {
 
   readonly events = new EventEmitter<{
     redisConsumerGroupDestroyed: [];
+    connectionAnnounced: [{ clientId: string }];
+    noMessageTimeoutReconnect: [{ clientId: string }];
     msgReceived: [{ id: string }];
   }>();
 
@@ -115,6 +126,7 @@ export class StacksMessageStream {
     }
     this.appName = this.sanitizeRedisClientName(args.appName);
     this.msgBatchSize = args.options?.batchSize ?? 100;
+    this.noMessageTimeoutMs = args.options?.noMessageTimeoutMs ?? 120_000;
 
     this.client = createClient({
       url: args.redisUrl,
@@ -261,8 +273,10 @@ export class StacksMessageStream {
         MKSTREAM: true,
       })
       .exec();
+    this.events.emit('connectionAnnounced', { clientId: this.clientId });
 
     // Start reading messages from the stream.
+    let lastMessageTime = Date.now();
     while (!this.abort.signal.aborted) {
       // The backend creates the group with the correct starting position, so we use '>' here to
       // get only messages after the last message ID.
@@ -279,6 +293,18 @@ export class StacksMessageStream {
         }
       );
       if (!results) {
+        // Check if we've been starved of messages for too long. This can happen if the server
+        // restarts and fails to clean up this client's stream/group, leaving us polling an
+        // orphaned stream that will never receive new messages.
+        if (this.noMessageTimeoutMs > 0) {
+          const elapsed = Date.now() - lastMessageTime;
+          if (elapsed > this.noMessageTimeoutMs) {
+            this.events.emit('noMessageTimeoutReconnect', { clientId: this.clientId });
+            throw new Error(
+              `No messages received for ${elapsed}ms (timeout: ${this.noMessageTimeoutMs}ms), reconnecting`
+            );
+          }
+        }
         continue;
       }
       for (const stream of results as XReadGroupResponseEntry[]) {
@@ -286,6 +312,7 @@ export class StacksMessageStream {
           this.logger.debug(
             `Received messages ${stream.messages[0].id} - ${stream.messages[stream.messages.length - 1].id} with client ${this.clientId}`
           );
+          lastMessageTime = Date.now();
         }
         for (const item of stream.messages) {
           await eventCallback(item.id, item.message.timestamp, {

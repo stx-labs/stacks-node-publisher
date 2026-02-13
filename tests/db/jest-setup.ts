@@ -11,6 +11,7 @@ beforeAll(() => {
   logger.info(`Using REDIS_STREAM_KEY_PREFIX: ${process.env.REDIS_STREAM_KEY_PREFIX}`);
 
   process.env.CLEANUP_INTERVAL_MS = '1000';
+  process.env.CLIENT_REDIS_BACKPRESSURE_POLL_MS = '50';
 
   ENV.reload();
 });

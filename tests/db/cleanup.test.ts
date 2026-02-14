@@ -99,6 +99,106 @@ describe('Cleanup tests', () => {
   });
 
   describe('client prune', () => {
+    test('idle chain tip stream consumer is pruned', async () => {
+      ENV.MAX_IDLE_TIME_MS = 200;
+
+      // Send an event to ensure the chain tip stream exists
+      await sendTestEvent(eventServer, { idleChainTipTest: 1 });
+
+      // Manually create a fake consumer group + consumer on the chain tip stream to simulate
+      // an orphaned consumer whose feeding task has died (no more XREADGROUP calls to refresh
+      // seenTime).
+      const fakeClientId = 'test-idle-chaintip';
+      const groupKey = redisBroker.getClientChainTipStreamGroupKey(fakeClientId);
+      const consumerKey = `${redisBroker.redisStreamKeyPrefix}consumer:${fakeClientId}`;
+      const clientStreamKey = redisBroker.getClientStreamKey(fakeClientId);
+
+      await redisBroker.client.xGroupCreate(redisBroker.chainTipStreamKey, groupKey, '$');
+      await redisBroker.client.xGroupCreateConsumer(
+        redisBroker.chainTipStreamKey,
+        groupKey,
+        consumerKey
+      );
+      // Create the client stream so prune can clean it up
+      await redisBroker.client.xAdd(clientStreamKey, '*', { test: '1' });
+
+      // Wait for seenTime to become stale (exceeds MAX_IDLE_TIME_MS)
+      await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+
+      // Send another event to keep the chain active (refreshes lastChainTipMsgTime so the
+      // chain-quiet check doesn't skip pruning)
+      await sendTestEvent(eventServer, { idleChainTipTest: 2 });
+
+      await redisBroker.pruneIdleClients();
+
+      // Verify the consumer group was destroyed on the chain tip stream
+      const groups = await redisBroker.client.xInfoGroups(redisBroker.chainTipStreamKey);
+      expect(groups.some(g => g.name === groupKey)).toBe(false);
+
+      // Verify client stream was deleted
+      const exists = await redisBroker.client.exists(clientStreamKey);
+      expect(exists).toBe(0);
+    });
+
+    test('dangling client stream is pruned', async () => {
+      // Send event to ensure chain tip stream exists and chain is active
+      await sendTestEvent(eventServer, { danglingTest: 1 });
+
+      // Create a client stream with no consumer group — simulates a dangling stream that was
+      // left behind without a proper consumer setup.
+      const fakeClientId = 'test-dangling';
+      const clientStreamKey = redisBroker.getClientStreamKey(fakeClientId);
+      await redisBroker.client.xAdd(clientStreamKey, '*', { test: '1' });
+
+      await redisBroker.pruneIdleClients();
+
+      // Verify client stream was deleted
+      const exists = await redisBroker.client.exists(clientStreamKey);
+      expect(exists).toBe(0);
+    });
+
+    test('idle client stream is pruned', async () => {
+      ENV.MAX_IDLE_TIME_MS = 200;
+
+      // Send event to ensure chain tip stream exists
+      await sendTestEvent(eventServer, { idleClientStreamTest: 1 });
+
+      // Manually create a client stream with a group and consumer, then read + ACK all
+      // messages so pelCount = 0 and activeTime is set.
+      const fakeClientId = 'test-idle-client';
+      const clientStreamKey = redisBroker.getClientStreamKey(fakeClientId);
+      const groupName = 'test-group';
+      const consumerName = 'test-consumer';
+
+      await redisBroker.client.xAdd(clientStreamKey, '*', { test: '1' });
+      await redisBroker.client.xGroupCreate(clientStreamKey, groupName, '0');
+
+      // Read to set activeTime, then ACK to set pelCount = 0
+      const msgs = await redisBroker.client.xReadGroup(groupName, consumerName, {
+        key: clientStreamKey,
+        id: '>',
+      });
+      if (msgs) {
+        for (const stream of msgs as { messages: { id: string }[] }[]) {
+          for (const msg of stream.messages) {
+            await redisBroker.client.xAck(clientStreamKey, groupName, msg.id);
+          }
+        }
+      }
+
+      // Wait for activeTime to become stale (exceeds MAX_IDLE_TIME_MS)
+      await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+
+      // Send another event to keep the chain active
+      await sendTestEvent(eventServer, { idleClientStreamTest: 2 });
+
+      await redisBroker.pruneIdleClients();
+
+      // Verify client stream was deleted
+      const exists = await redisBroker.client.exists(clientStreamKey);
+      expect(exists).toBe(0);
+    });
+
     test('client reconnects after no-message timeout on orphaned stream', async () => {
       // Use a unique prefix so the server doesn't process this client's handshake, simulating an
       // orphaned stream where no messages are ever delivered.

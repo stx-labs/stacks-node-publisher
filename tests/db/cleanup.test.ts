@@ -12,7 +12,7 @@ import {
   withTimeout,
 } from './utils';
 import { once } from 'node:events';
-import { waiter } from '@stacks/api-toolkit';
+import { timeout, waiter } from '@stacks/api-toolkit';
 
 describe('Cleanup tests', () => {
   let db: PgStore;
@@ -43,7 +43,7 @@ describe('Cleanup tests', () => {
   });
 
   describe('chain tip stream trim', () => {
-    test('clients connecting during trim', async () => {
+    test('client connections are handled during trim', async () => {
       await testWithFailCb(async fail => {
         // Global stream not yet initialized
         let trimResult = await redisBroker.trimChainTipStream();
@@ -132,6 +132,102 @@ describe('Cleanup tests', () => {
       expect(newClientId).not.toBe(firstClientId);
 
       await client.stop();
+    });
+
+    test('slow backfill client is not pruned because it is not idle', async () => {
+      await testWithFailCb(async fail => {
+        ENV.DB_MSG_BATCH_SIZE = 10;
+        ENV.MAX_IDLE_TIME_MS = 200;
+        ENV.MAX_STUCK_TIME_MS = 120_000;
+        ENV.CLIENT_REDIS_STREAM_MAX_LEN = 10;
+
+        // Fill some messages so the client has data to backfill
+        const msgCount = 20;
+        for (let i = 0; i < msgCount; i++) {
+          await sendTestEvent(eventServer, { slowClientTest: i });
+        }
+        // Run cleanup to trim the chain tip stream. This will force the client to be in backfill
+        // mode only.
+        await redisBroker.cleanup();
+
+        // The client will stall on the first received message, leaving pending entries in its
+        // consumer stream (pelCount > 0).
+        const client = await createTestClient(null, '*', fail);
+        const stallStarted = waiter();
+        const stall = waiter();
+        client.start(
+          async () => Promise.resolve(null),
+          async () => {
+            if (!stallStarted.isFinished) {
+              stallStarted.finish();
+            }
+            // Stall for longer than MAX_IDLE_TIME_MS but much less than MAX_STUCK_TIME_MS
+            await stall;
+          }
+        );
+
+        // Wait for the client to start processing (and stalling on) the first message
+        await withTimeout(stallStarted);
+        // Wait long enough for the client stream consumer to exceed MAX_IDLE_TIME_MS
+        await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+
+        // Run prune — the client should NOT be pruned because it has pending messages, so the
+        // threshold is MAX_STUCK_TIME_MS (much higher) instead of MAX_IDLE_TIME_MS.
+        await redisBroker.cleanup();
+        const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
+        const exists = await redisBroker.client.exists(clientStreamKey);
+        expect(exists).toBe(1);
+
+        stall.finish();
+        await client.stop();
+      });
+    });
+
+    test('clients are not pruned if there is no chain activity', async () => {
+      await testWithFailCb(async fail => {
+        ENV.MAX_IDLE_TIME_MS = 200;
+
+        // Send some events so the chain tip stream is populated and lastChainTipMsgTime is set.
+        const msgCount = 3;
+        for (let i = 0; i < msgCount; i++) {
+          await sendTestEvent(eventServer, { noChainActivityTest: i });
+        }
+
+        // Create a live-streaming client
+        const lastDbMsg = await db.getLastMessage();
+        const client = await createTestClient(lastDbMsg?.sequence_number, '*', fail);
+        const promoted = once(redisBroker.events, 'consumerPromotedToLiveStream');
+        const liveStreamWaiter = waiter();
+        client.start(
+          async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
+          async () => {
+            liveStreamWaiter.finish();
+            return Promise.resolve();
+          }
+        );
+        await withTimeout(promoted);
+
+        // Send one more event and wait for the client to receive it, confirming the client
+        // stream consumer has a valid activeTime.
+        await sendTestEvent(eventServer, { noChainActivityTest: 'live' });
+        await withTimeout(liveStreamWaiter);
+
+        // Now stop sending events and wait longer than MAX_IDLE_TIME_MS. This simulates a
+        // quiet chain where no new blocks arrive. The client's activeTime will go stale
+        // because no messages are being delivered to the client stream.
+        await timeout(ENV.MAX_IDLE_TIME_MS * 2);
+
+        // Run cleanup — the client should NOT be pruned because the chain itself has been
+        // quiet (lastChainTipMsgTime is also stale), so idle detection is skipped.
+        await redisBroker.cleanup();
+
+        // Verify the client stream still exists
+        const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
+        const exists = await redisBroker.client.exists(clientStreamKey);
+        expect(exists).toBe(1);
+
+        await client.stop();
+      });
     });
   });
 });

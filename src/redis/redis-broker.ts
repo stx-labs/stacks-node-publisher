@@ -91,6 +91,11 @@ export class RedisBroker {
   readonly abortController = new AbortController();
   readonly db: PgStore;
 
+  /**
+   * Timestamp of the last message added to the chain tip stream. Used to determine whether the
+   * chain is active so that idle client detection isn't triggered during quiet periods.
+   */
+  private lastChainTipMsgTime = 0;
   private cleanupIntervalTimer: NodeJS.Timeout | null = null;
 
   readonly events = new EventEmitter<{
@@ -342,6 +347,7 @@ export class RedisBroker {
         path: args.eventPath,
         body: args.eventBody,
       });
+      this.lastChainTipMsgTime = Date.now();
     } catch (error) {
       // Ignore error if it's a duplicate message, which could happen if a previous xadd succeeded
       // on the server but failed to send the response back to the client (e.g. network error).
@@ -358,7 +364,7 @@ export class RedisBroker {
    * Run cleanup tasks: trim the chain tip stream and prune idle clients.
    * This is called periodically by the cleanup interval timer.
    */
-  private async cleanup() {
+  async cleanup() {
     if (this.abortController.signal.aborted) {
       return;
     }
@@ -734,7 +740,7 @@ export class RedisBroker {
       // Backpressure handling to avoid overwhelming redis memory
       while (!conn.abortSignal.aborted) {
         const clientStreamLen = await conn.client.xLen(conn.clientStreamKey);
-        if (clientStreamLen <= ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
+        if (clientStreamLen < ENV.CLIENT_REDIS_STREAM_MAX_LEN) {
           break;
         } else {
           logger.debug(
@@ -1062,6 +1068,7 @@ export class RedisBroker {
     const fullStreamInfo = await xInfoStreamFull(this.client, this.chainTipStreamKey);
 
     // Part 1: Check for idle consumers on the chain tip stream
+    const chainQuietMs = Date.now() - this.lastChainTipMsgTime;
     for (const group of fullStreamInfo.groups) {
       if (group.consumers.length > 1) {
         this.logger.error(
@@ -1070,9 +1077,14 @@ export class RedisBroker {
       }
       for (const consumer of group.consumers) {
         const idleMs = Date.now() - consumer.seenTime;
-        const isIdle = idleMs > ENV.MAX_IDLE_TIME_MS;
 
-        if (isIdle) {
+        // If the chain itself has been quiet longer than the idle threshold, all consumers will
+        // naturally have stale timing data. Skip idle detection until chain activity resumes (e.g.
+        // seenTime can go stale during backpressure even though the feeding task is alive).
+        if (chainQuietMs > ENV.MAX_IDLE_TIME_MS) {
+          continue;
+        }
+        if (idleMs > ENV.MAX_IDLE_TIME_MS) {
           const clientId = consumer.name.split(':').at(-1) ?? '';
           const clientStreamKey = this.getClientStreamKey(clientId);
           this.logger.info(
@@ -1086,7 +1098,6 @@ export class RedisBroker {
     // Part 2: Check for dangling/idle client streams
     const clientStreamKeys = await this.client.keys(this.getClientStreamKey('*'));
     const clientStreamFullInfos = await xInfoStreamsFull(this.client, clientStreamKeys);
-
     for (const streamInfo of clientStreamFullInfos) {
       if (!streamInfo.response) {
         // Stream was deleted between fetching the list of keys and getting info
@@ -1128,17 +1139,29 @@ export class RedisBroker {
         for (const consumer of group.consumers) {
           const refTime = consumer.activeTime > 0 ? consumer.activeTime : consumer.seenTime;
           const inactiveMs = Date.now() - refTime;
-          // If the consumer has pending (unacknowledged) messages, it may still be actively
-          // processing them slowly. Use a much higher threshold to tolerate slow consumers while
-          // still eventually pruning crashed clients that left orphaned pending entries.
-          const idleThreshold =
-            consumer.pelCount > 0 ? ENV.MAX_STUCK_TIME_MS : ENV.MAX_IDLE_TIME_MS;
+
+          // Determine the idle threshold based on the consumer's state:
+          let idleThreshold: number;
+          if (consumer.pelCount > 0) {
+            // Consumer has pending (unacknowledged) messages — it may still be actively
+            // processing them slowly. Use a much higher threshold to tolerate slow consumers
+            // while still eventually pruning crashed clients that left orphaned pending entries.
+            idleThreshold = ENV.MAX_STUCK_TIME_MS;
+          } else if (chainQuietMs > ENV.MAX_IDLE_TIME_MS) {
+            // No messages have arrived on the chain tip stream recently. All client streams
+            // will have stale `activeTime` simply because there's nothing to deliver, not
+            // because the consumers are dead. Skip idle detection until chain activity resumes.
+            continue;
+          } else {
+            idleThreshold = ENV.MAX_IDLE_TIME_MS;
+          }
+
           if (inactiveMs > idleThreshold) {
             const clientId = clientStreamKey.split(':').at(-1) ?? '';
             const groupId = this.getClientChainTipStreamGroupKey(clientId);
             const reason = consumer.pelCount > 0 ? 'stalled' : 'idle';
             this.logger.info(
-              `Pruning ${reason} client stream ${clientId} after ${(inactiveMs * 1000).toFixed(3)}s`
+              `Pruning ${reason} client stream ${clientId} after ${(inactiveMs / 1000).toFixed(3)}s`
             );
             await prune(groupId, clientStreamKey);
           }

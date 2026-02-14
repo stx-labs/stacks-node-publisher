@@ -60,7 +60,7 @@ const schema = Type.Object({
    * covers the case where a client crashes mid-processing, leaving orphaned pending entries. Set
    * higher than the longest expected message-processing time to avoid killing slow consumers.
    */
-  MAX_STUCK_TIME_MS: Type.Integer({ default: 3_600_000 }),
+  MAX_STUCK_TIME_MS: Type.Integer({ default: 60_000 * 60 }),
   /**
    * Max number of messages that a consumer stream can lag behind compared to the last chain tip
    * message before it's considered slow and demoted to backfill.

@@ -16,7 +16,7 @@ import * as assert from 'node:assert';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 
-describe('Backfill tests', () => {
+describe('Backfill interrupt tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;

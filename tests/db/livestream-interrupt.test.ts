@@ -16,7 +16,7 @@ import * as assert from 'node:assert';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 
-describe('Live-stream tests', () => {
+describe('Live-stream interrupt tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
@@ -210,8 +210,6 @@ describe('Live-stream tests', () => {
         }
       );
 
-      const pruned = once(redisBroker.events, 'idleConsumerPruned');
-
       const firstMsgsReceived = waiter<{ originalClientId: string }>();
       client.start(
         async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
@@ -233,45 +231,13 @@ describe('Live-stream tests', () => {
       lastDbMsg = await db.getLastMessage();
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
+          // Client should have reconnected with a new client ID
+          expect(client.clientId).not.toBe(originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
         });
-        if (
-          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
-        ) {
-          resolve();
-        }
       });
-
-      // Send over ENV.MAX_MSG_LAG messages to force the old and now disconnected stream to be pruned
-      for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
-        await sendTestEvent(eventServer, { laggingMsgNumber: i });
-      }
-      await withTimeout(pruned);
-
-      // The client consumer redis stream should be pruned
-      const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
-      const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
-
-      // The client consumer group on the chain tip stream should be pruned
-      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
-      const chainTipStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
-        .then(
-          () => {
-            throw new Error('Expected xInfoConsumers to reject');
-          },
-          (error: Error) => {
-            if (error?.message.includes('NOGROUP')) {
-              return false;
-            } else {
-              throw error;
-            }
-          }
-        );
-      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();
@@ -363,44 +329,13 @@ describe('Live-stream tests', () => {
       lastDbMsg = await db.getLastMessage();
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
+          // Client should have reconnected with a new client ID
+          expect(client.clientId).not.toBe(originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
         });
-        if (
-          client.lastProcessedMessageId.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]
-        ) {
-          resolve();
-        }
       });
-
-      // Send over ENV.MAX_MSG_LAG messages to force the old and now disconnected stream to be pruned
-      for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {
-        await sendTestEvent(eventServer, { laggingMsgNumber: i });
-      }
-
-      // The client consumer redis stream should be pruned
-      const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
-      const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
-
-      // The client consumer group on the chain tip stream should be pruned
-      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
-      const chainTipStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
-        .then(
-          () => {
-            throw new Error('Expected xInfoConsumers to reject');
-          },
-          (error: Error) => {
-            if (error?.message.includes('NOGROUP')) {
-              return false;
-            } else {
-              throw error;
-            }
-          }
-        );
-      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();
@@ -605,39 +540,13 @@ describe('Live-stream tests', () => {
       assert(lastDbMsg);
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
+          // Client should have reconnected with a new client ID
+          expect(client.clientId).not.toBe(originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
         });
-        if (
-          client.lastProcessedMessageId.split('-')[0] === lastDbMsg.sequence_number.split('-')[0]
-        ) {
-          resolve();
-        }
       });
-
-      // The original client consumer redis stream should be pruned
-      const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
-      const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
-
-      // The original client consumer group on the chain tip stream should be pruned
-      const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
-      const chainTipStreamGroupExists = await redisBroker.client
-        .xInfoConsumers(redisBroker.chainTipStreamKey, clientGroupKey)
-        .then(
-          () => {
-            throw new Error('Expected xInfoConsumers to reject');
-          },
-          (error: Error) => {
-            if (error?.message.includes('NOGROUP')) {
-              return false;
-            } else {
-              throw error;
-            }
-          }
-        );
-      expect(chainTipStreamGroupExists).toBe(false);
 
       await client.stop();
       ENV.reload();

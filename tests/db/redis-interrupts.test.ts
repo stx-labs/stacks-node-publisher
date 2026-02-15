@@ -17,7 +17,7 @@ import {
 } from './utils';
 import { Message } from '../../client/src/messages';
 
-describe('Redis interrupts', () => {
+describe('Redis interrupt tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;

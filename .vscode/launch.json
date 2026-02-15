@@ -32,14 +32,14 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "Jest: unit tests",
+      "name": "Jest: event-server tests",
       "program": "${workspaceFolder}/node_modules/jest/bin/jest",
       "args": [
         "--testTimeout=3600000",
         "--runInBand",
         "--no-cache",
         "--selectProjects",
-        "unit-tests",
+        "event-server",
       ],
       "outputCapture": "std",
       "console": "internalConsole",
@@ -47,17 +47,30 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "Jest: db tests",
+      "name": "Jest: redis-broker tests",
       "program": "${workspaceFolder}/node_modules/jest/bin/jest",
       "args": [
         "--testTimeout=3600000",
         "--runInBand",
         "--no-cache",
         "--selectProjects",
-        "db-tests",
+        "redis-broker",
       ],
       "outputCapture": "std",
       "console": "internalConsole",
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Jest: client-stream tests",
+      "program": "${workspaceFolder}/node_modules/jest/bin/jest",
+      "args": [
+        "--testTimeout=3600000",
+        "--runInBand",
+        "--no-cache",
+        "--selectProjects",
+        "client-stream",
+      ],
     },
   ]
 }

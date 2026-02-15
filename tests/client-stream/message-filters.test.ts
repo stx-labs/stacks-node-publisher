@@ -7,7 +7,7 @@ import {
   testWithFailCb,
   IntegrationTestEnv,
   withTimeout,
-} from './utils';
+} from '../utils';
 import { Message, MessagePath } from '../../client/src/messages';
 
 describe('Message filters', () => {

@@ -11,7 +11,7 @@ import {
   redisFlushAllWithPrefix,
   sendTestEvent,
   testWithFailCb,
-} from './utils';
+} from '../utils';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 

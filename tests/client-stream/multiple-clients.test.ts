@@ -10,7 +10,7 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from './utils';
+} from '../utils';
 import { waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';
 

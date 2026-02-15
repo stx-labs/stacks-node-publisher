@@ -10,7 +10,7 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from './utils';
+} from '../utils';
 import { once } from 'node:events';
 import { timeout, waiter } from '@stacks/api-toolkit';
 

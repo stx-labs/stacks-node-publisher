@@ -14,7 +14,7 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from './utils';
+} from '../utils';
 import { Message } from '../../client/src/messages';
 
 describe('Redis interrupt tests', () => {

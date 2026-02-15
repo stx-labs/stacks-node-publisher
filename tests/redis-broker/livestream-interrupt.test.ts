@@ -11,7 +11,7 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from './utils';
+} from '../utils';
 import * as assert from 'node:assert';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages';

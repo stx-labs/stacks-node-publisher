@@ -1,6 +1,6 @@
 {
   "name": "stacks-node-publisher",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Store-and-push service for Stacks node events",
   "main": "index.js",
   "type": "commonjs",
@@ -10,8 +10,6 @@
     "start": "node ./dist/src/index.js",
     "start-ts": "ts-node ./src/index.ts",
     "test": "jest --runInBand --bail",
-    "test:unit": "jest --selectProjects unit-tests",
-    "test:db": "jest --selectProjects db-tests",
     "testenv:run": "docker compose -f docker/docker-compose.dev.postgres.yml -f docker/docker-compose.dev.redis.yml up --force-recreate -V",
     "testenv:stop": "docker compose -f docker/docker-compose.dev.postgres.yml -f docker/docker-compose.dev.redis.yml down -v -t 0",
     "testenv:logs": "docker compose -f docker/docker-compose.dev.postgres.yml -f docker/docker-compose.dev.redis.yml logs -t -f",

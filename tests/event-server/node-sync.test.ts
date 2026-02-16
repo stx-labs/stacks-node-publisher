@@ -4,7 +4,7 @@ import {
   teardownIntegrationTestEnv,
   IntegrationTestEnv,
   loadEventsDump,
-} from './utils';
+} from '../utils';
 
 describe('Node synchronization', () => {
   let env: IntegrationTestEnv;

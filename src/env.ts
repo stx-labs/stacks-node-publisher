@@ -52,9 +52,15 @@ const schema = Type.Object({
   /** Max number of msgs in a consumer stream before backpressure (waiting) is applied. */
   CLIENT_REDIS_STREAM_MAX_LEN: Type.Integer({ default: 100 }),
   /** Interval (ms) to poll for backpressure on the consumer stream. */
-  CLIENT_REDIS_BACKPRESSURE_POLL_MS: Type.Integer({ default: 100 }),
-  /** Max idle time (ms) a consumer stream before it's considered idle and pruned. */
+  CLIENT_REDIS_BACKPRESSURE_POLL_MS: Type.Integer({ default: 1_000 }),
+  /** Max time (ms) before pruning an empty consumer stream. */
   MAX_IDLE_TIME_MS: Type.Integer({ default: 60_000 }),
+  /**
+   * Max time (ms) before pruning a consumer stream that has pending (unacknowledged) messages. This
+   * covers the case where a client crashes mid-processing, leaving orphaned pending entries. Set
+   * higher than the longest expected message-processing time to avoid killing slow consumers.
+   */
+  MAX_STUCK_TIME_MS: Type.Integer({ default: 60_000 * 60 }),
   /**
    * Max number of messages that a consumer stream can lag behind compared to the last chain tip
    * message before it's considered slow and demoted to backfill.

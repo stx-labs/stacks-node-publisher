@@ -8,7 +8,7 @@ import {
   IntegrationTestEnv,
   withTimeout,
   sendTestEvent,
-} from './utils';
+} from '../utils';
 import { Message } from '../../client/src/messages';
 
 describe('Stream position lookup', () => {

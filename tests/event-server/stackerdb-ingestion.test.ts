@@ -7,7 +7,7 @@ import {
   testWithFailCb,
   IntegrationTestEnv,
   withTimeout,
-} from './utils';
+} from '../utils';
 
 describe('Stackerdb ingestion tests', () => {
   let env: IntegrationTestEnv;

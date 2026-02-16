@@ -15,6 +15,12 @@ concurrency:
 
 jobs:
   test:
+    strategy:
+      matrix:
+        suite:
+          - event-server
+          - redis-broker
+          - client-stream
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -46,7 +52,7 @@ jobs:
           npm ci --prefix client --audit=false
 
       - name: Run tests
-        run: npm run test -- --coverage
+        run: npm run test -- --coverage --selectProjects ${{ matrix.suite }}
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

@@ -1,5 +1,5 @@
 import { logger } from '@stacks/api-toolkit';
-import { ENV } from '../../src/env';
+import { ENV } from '../src/env';
 
 beforeAll(() => {
   // use a random PGSCHEMA for each test to avoid conflicts

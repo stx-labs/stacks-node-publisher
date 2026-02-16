@@ -62,6 +62,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=semver,pattern={{major}},value=${{ inputs.version }}
             type=raw,value=latest,enable=${{ !contains(inputs.version, '-') }}
 
       - name: Log in to GitHub Container Registry

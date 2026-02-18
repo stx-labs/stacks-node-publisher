@@ -79,6 +79,19 @@ type XReadGroupResponseEntry = {
 };
 
 /**
+ * Error thrown when no messages are received for a given timeout.
+ */
+class NoMessageTimeoutError extends Error {
+  constructor(
+    public readonly elapsedMs: number,
+    public readonly timeoutMs: number
+  ) {
+    super(`No messages received for ${elapsedMs}ms (timeout: ${timeoutMs}ms), reconnecting`);
+    this.name = 'NoMessageTimeoutError';
+  }
+}
+
+/**
  * A client for a Stacks core node message stream.
  */
 export class StacksMessageStream {
@@ -202,6 +215,11 @@ export class StacksMessageStream {
           if (this.abort.signal.aborted) {
             this.logger.info('Stream ingestion aborted');
             break;
+          } else if (error instanceof NoMessageTimeoutError) {
+            this.logger.info(
+              `No messages received for ${error.elapsedMs}ms (timeout: ${error.timeoutMs}ms), restarting stream`
+            );
+            continue;
           } else if ((error as Error).message?.includes('NOGROUP')) {
             // The redis stream doesn't exist. This can happen if the redis server was restarted,
             // or if the client is idle/offline, or if the client is processing messages too slowly.
@@ -300,9 +318,7 @@ export class StacksMessageStream {
           const elapsed = Date.now() - lastMessageTime;
           if (elapsed > this.noMessageTimeoutMs) {
             this.events.emit('noMessageTimeoutReconnect', { clientId: this.clientId });
-            throw new Error(
-              `No messages received for ${elapsed}ms (timeout: ${this.noMessageTimeoutMs}ms), reconnecting`
-            );
+            throw new NoMessageTimeoutError(elapsed, this.noMessageTimeoutMs);
           }
         }
         continue;

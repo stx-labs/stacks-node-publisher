@@ -3,6 +3,7 @@ import { logger as defaultLogger, timeout, waiter, Waiter } from '@stacks/api-to
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Message, MessagePath } from './messages';
+import { MessageIngestionError, NoMessageTimeoutError } from './errors';
 
 export * from './messages';
 
@@ -192,16 +193,27 @@ export class StacksMessageStream {
 
   start(positionCallback: StreamPositionCallback, messageCallback: MessageCallback) {
     this.logger.info(`Starting stream ingestion for client ${this.clientId}`);
+    const reconnectRetryDelaysMs = [100, 1_000, 5_000, 30_000, 120_000] as const;
+    let reconnectRetryAttempt = 0;
+
+    const getReconnectRetryDelayMs = () =>
+      reconnectRetryDelaysMs[Math.min(reconnectRetryAttempt, reconnectRetryDelaysMs.length - 1)];
+
     const runIngest = async () => {
       while (!this.abort.signal.aborted) {
         try {
           const startingPosition = await positionCallback();
           this.logger.info(`Starting position: ${JSON.stringify(startingPosition)}`);
           await this.ingestEventStream(startingPosition, messageCallback);
+          reconnectRetryAttempt = 0;
         } catch (error: unknown) {
           if (this.abort.signal.aborted) {
-            this.logger.info('Stream ingestion aborted');
+            this.logger.info('Stream ingestion was aborted');
             break;
+          } else if (error instanceof NoMessageTimeoutError) {
+            this.logger.info(error.message);
+          } else if (error instanceof MessageIngestionError) {
+            this.logger.error(error.cause as Error, error.message);
           } else if ((error as Error).message?.includes('NOGROUP')) {
             // The redis stream doesn't exist. This can happen if the redis server was restarted,
             // or if the client is idle/offline, or if the client is processing messages too slowly.
@@ -212,19 +224,17 @@ export class StacksMessageStream {
               `The Redis stream group for this client was destroyed by the server for client ${this.clientId}`
             );
             this.events.emit('redisConsumerGroupDestroyed');
-            // re-announce connection, re-create group, etc
-            continue;
           } else {
-            // TODO: what are other expected errors and how should we handle them? For now we just retry
-            // forever.
             this.logger.error(
               error as Error,
-              `Error reading or acknowledging from stream for client ${this.clientId}`
+              `Unknown error while reading stream for client ${this.clientId}`
             );
-            this.logger.info('Reconnecting to Redis stream in 1 second...');
-            await timeout(1000);
-            continue;
           }
+
+          const reconnectDelayMs = getReconnectRetryDelayMs();
+          this.logger.info(`Reconnecting to stream in ${reconnectDelayMs}ms...`);
+          await timeout(reconnectDelayMs);
+          reconnectRetryAttempt += 1;
         }
       }
     };
@@ -239,7 +249,7 @@ export class StacksMessageStream {
 
   private async ingestEventStream(
     startingPosition: StreamPosition,
-    eventCallback: MessageCallback
+    messageCallback: MessageCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
     // for any previous connections.
@@ -300,9 +310,7 @@ export class StacksMessageStream {
           const elapsed = Date.now() - lastMessageTime;
           if (elapsed > this.noMessageTimeoutMs) {
             this.events.emit('noMessageTimeoutReconnect', { clientId: this.clientId });
-            throw new Error(
-              `No messages received for ${elapsed}ms (timeout: ${this.noMessageTimeoutMs}ms), reconnecting`
-            );
+            throw new NoMessageTimeoutError(elapsed, this.noMessageTimeoutMs);
           }
         }
         continue;
@@ -315,11 +323,14 @@ export class StacksMessageStream {
           lastMessageTime = Date.now();
         }
         for (const item of stream.messages) {
-          await eventCallback(item.id, item.message.timestamp, {
-            path: item.message.path as MessagePath,
-            payload: JSON.parse(item.message.body),
-          });
-
+          try {
+            await messageCallback(item.id, item.message.timestamp, {
+              path: item.message.path as MessagePath,
+              payload: JSON.parse(item.message.body),
+            });
+          } catch (error: unknown) {
+            throw new MessageIngestionError(error);
+          }
           this.lastProcessedMessageId = item.id;
           this.events.emit('msgReceived', { id: item.id });
 

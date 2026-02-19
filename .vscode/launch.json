@@ -42,7 +42,7 @@
         "event-server",
       ],
       "outputCapture": "std",
-      "console": "internalConsole",
+      "console": "integratedTerminal",
     },
     {
       "type": "node",
@@ -57,7 +57,7 @@
         "redis-broker",
       ],
       "outputCapture": "std",
-      "console": "internalConsole",
+      "console": "integratedTerminal",
     },
     {
       "type": "node",
@@ -71,6 +71,8 @@
         "--selectProjects",
         "client-stream",
       ],
+      "outputCapture": "std",
+      "console": "integratedTerminal",
     },
   ]
 }

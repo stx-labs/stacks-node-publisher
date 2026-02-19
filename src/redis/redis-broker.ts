@@ -448,9 +448,15 @@ export class RedisBroker {
             .catch(async (error: unknown) => {
               error = unwrapRedisMultiErrorReply(error as Error) ?? error;
               if ((error as Error).message?.includes('NOGROUP')) {
-                logger.warn(error as Error, `Consumer group not found for client (likely pruned)`);
+                logger.info(
+                  error as Error,
+                  `Consumer group not found for client ${clientId} (likely pruned), cleaning up client connection`
+                );
               } else if (!this.abortController.signal.aborted) {
-                logger.error(error as Error, `Error processing msgs for consumer stream`);
+                logger.error(
+                  error as Error,
+                  `Error processing msgs for consumer stream for client ${clientId}, cleaning up client connection`
+                );
               }
               const groupKey = this.getClientChainTipStreamGroupKey(clientId);
               const clientStreamKey = this.getClientStreamKey(clientId);
@@ -464,7 +470,10 @@ export class RedisBroker {
                 .catch((error: unknown) => {
                   if (!this.abortController.signal.aborted) {
                     error = unwrapRedisMultiErrorReply(error as Error) ?? error;
-                    logger.warn(error, `Error cleaning up client connection`);
+                    logger.warn(
+                      error,
+                      `Error cleaning up client connection for client ${clientId}`
+                    );
                   }
                 });
             })

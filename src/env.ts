@@ -41,12 +41,12 @@ const schema = Type.Object({
   REDIS_STREAM_KEY_PREFIX: Type.String({ default: '' }),
 
   /** Size of the batch of messages to read from pg and write to redis during backfilling. */
-  DB_MSG_BATCH_SIZE: Type.Integer({ default: 100 }),
+  DB_MSG_BATCH_SIZE: Type.Integer({ default: 20 }),
   /**
    * Cursor page size for streaming rows from pg during backfilling. Controls how many rows are
    * held in memory at once, reducing peak memory usage for large messages.
    */
-  DB_MSG_CURSOR_SIZE: Type.Integer({ default: 10 }),
+  DB_MSG_CURSOR_SIZE: Type.Integer({ default: 5 }),
   /** Max size of the batch of messages to read from redis global stream and write into the consumer stream during live-streaming. */
   LIVE_STREAM_BATCH_SIZE: Type.Integer({ default: 100 }),
   /** Max number of msgs in a consumer stream before backpressure (waiting) is applied. */

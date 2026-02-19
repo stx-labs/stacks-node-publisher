@@ -91,6 +91,13 @@ class NoMessageTimeoutError extends Error {
   }
 }
 
+class MessageIngestionError extends Error {
+  constructor(public readonly cause: unknown) {
+    super(`Error ingesting message: ${cause}`);
+    this.name = 'MessageIngestionError';
+  }
+}
+
 /**
  * A client for a Stacks core node message stream.
  */
@@ -220,6 +227,9 @@ export class StacksMessageStream {
               `No messages received for ${error.elapsedMs}ms (timeout: ${error.timeoutMs}ms), restarting stream`
             );
             continue;
+          } else if (error instanceof MessageIngestionError) {
+            this.logger.error(error.cause as Error, `Error ingesting message: ${error.cause}`);
+            continue;
           } else if ((error as Error).message?.includes('NOGROUP')) {
             // The redis stream doesn't exist. This can happen if the redis server was restarted,
             // or if the client is idle/offline, or if the client is processing messages too slowly.
@@ -257,7 +267,7 @@ export class StacksMessageStream {
 
   private async ingestEventStream(
     startingPosition: StreamPosition,
-    eventCallback: MessageCallback
+    messageCallback: MessageCallback
   ): Promise<void> {
     // Reset clientId for each new connection, this prevents race-conditions around cleanup
     // for any previous connections.
@@ -331,11 +341,14 @@ export class StacksMessageStream {
           lastMessageTime = Date.now();
         }
         for (const item of stream.messages) {
-          await eventCallback(item.id, item.message.timestamp, {
-            path: item.message.path as MessagePath,
-            payload: JSON.parse(item.message.body),
-          });
-
+          try {
+            await messageCallback(item.id, item.message.timestamp, {
+              path: item.message.path as MessagePath,
+              payload: JSON.parse(item.message.body),
+            });
+          } catch (error: unknown) {
+            throw new MessageIngestionError(error);
+          }
           this.lastProcessedMessageId = item.id;
           this.events.emit('msgReceived', { id: item.id });
 

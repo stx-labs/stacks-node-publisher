@@ -10,9 +10,17 @@ import { RedisBroker } from './redis/redis-broker';
 async function initApp() {
   logger.info(`Initializing in ${ENV.RUN_MODE} run mode...`);
   const isReadonly = ENV.RUN_MODE === 'readonly';
+
   const db = await PgStore.connect({
     skipMigrations: isReadonly,
     createSchema: !isReadonly,
+  });
+  registerShutdownConfig({
+    name: 'DB',
+    forceKillable: true,
+    handler: async () => {
+      await db.close();
+    },
   });
 
   // TODO: consider the following runmodes:
@@ -40,7 +48,7 @@ async function initApp() {
   });
   registerShutdownConfig({
     name: 'Redis client',
-    forceKillable: false,
+    forceKillable: true,
     handler: async () => {
       await redisBroker.close();
     },
@@ -54,7 +62,7 @@ async function initApp() {
   const eventServer = new EventObserverServer({ promRegistry, db, redisBroker });
   registerShutdownConfig({
     name: 'Event observer server',
-    forceKillable: false,
+    forceKillable: true,
     handler: async () => {
       await eventServer.close();
     },
@@ -67,7 +75,7 @@ async function initApp() {
     const promServer = await buildPromServer({ registry: promRegistry });
     registerShutdownConfig({
       name: 'Prometheus Server',
-      forceKillable: false,
+      forceKillable: true,
       handler: async () => {
         await promServer.close();
       },
@@ -79,20 +87,12 @@ async function initApp() {
   const profilerServer = await buildProfilerServer();
   registerShutdownConfig({
     name: 'Profiler Server',
-    forceKillable: false,
+    forceKillable: true,
     handler: async () => {
       await profilerServer.close();
     },
   });
   await profilerServer.listen({ host: ENV.OBSERVER_HOST, port: ENV.PROFILER_PORT });
-
-  registerShutdownConfig({
-    name: 'DB',
-    forceKillable: false,
-    handler: async () => {
-      await db.close();
-    },
-  });
 }
 
 registerShutdownConfig();

@@ -428,12 +428,14 @@ export class RedisBroker {
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
             disableOfflineQueue: true,
           });
+
           const clientAbortController = new AbortController();
           this.consumerClients.set(clientId, {
             client: dedicatedClient,
             abortController: clientAbortController,
           });
           this.events.emit('perConsumerClientCreated', { clientId });
+
           dedicatedClient.on('error', (err: Error) => {
             if (!this.abortController.signal.aborted) {
               logger.error(err, `Redis error on dedicated client connection for client`);
@@ -443,11 +445,7 @@ export class RedisBroker {
           // Determine the starting message sequence number for this client by resolving its
           // starting position.
           const startSequenceNumber = await this.resolveClientStartMessageSequenceNumber(
-            {
-              lastIndexBlockHash,
-              lastBlockHeight,
-              lastMessageId,
-            },
+            { lastIndexBlockHash, lastBlockHeight, lastMessageId },
             logger
           );
           // Once we have the starting position, delete the connection request message. This ensures
@@ -458,12 +456,7 @@ export class RedisBroker {
           // once. This also ensures that if the client connection is closed, the promise will be
           // rejected and the client will be cleaned up.
           void this.streamMessagesToClient(
-            {
-              client: dedicatedClient,
-              appName,
-              clientId,
-              selectedPaths,
-            },
+            { client: dedicatedClient, appName, clientId, selectedPaths },
             startSequenceNumber,
             clientAbortController,
             logger

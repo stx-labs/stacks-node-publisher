@@ -395,16 +395,30 @@ export class RedisBroker {
         for (const msg of request.messages) {
           const msgId = msg.id;
           const msgPayload = msg.message;
-
-          const clientId = msgPayload['client_id'];
-          const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
-          const lastBlockHeight = msgPayload['last_block_height'] ?? '';
-          const lastMessageId = msgPayload['last_message_id'] ?? '';
-          const appName = msgPayload['app_name'];
-          const selectedPaths: SelectedMessagePaths =
-            msgPayload['selected_paths'] !== '*'
-              ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
-              : '*';
+          let clientId: string;
+          let appName: string;
+          let lastIndexBlockHash: string;
+          let lastBlockHeight: string;
+          let lastMessageId: string;
+          let selectedPaths: SelectedMessagePaths;
+          try {
+            clientId = msgPayload['client_id'];
+            lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
+            lastBlockHeight = msgPayload['last_block_height'] ?? '';
+            lastMessageId = msgPayload['last_message_id'] ?? '';
+            appName = msgPayload['app_name'];
+            selectedPaths =
+              msgPayload['selected_paths'] !== '*'
+                ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
+                : '*';
+          } catch (error) {
+            this.logger.error(
+              { error, msgId, msgPayload },
+              'Malformed connection request message; dropping it from stream'
+            );
+            await listeningClient.xDel(connectionStreamKey, msgId);
+            continue;
+          }
           this.logger.info(msgPayload, `New client connection: ${clientId}, app: ${appName}`);
 
           const logger = this.logger.child({ clientId, appName });

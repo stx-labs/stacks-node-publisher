@@ -413,25 +413,27 @@ export class RedisBroker {
             await listeningClient.xDel(connectionStreamKey, msgId);
             continue;
           }
+          const {
+            clientId,
+            appName,
+            lastIndexBlockHash,
+            lastBlockHeight,
+            lastMessageId,
+            selectedPaths,
+          } = request;
 
-          this.logger.info(
-            request,
-            `New client connection: ${request.clientId}, app: ${request.appName}`
-          );
-          const logger = this.logger.child({
-            clientId: request.clientId,
-            appName: request.appName,
-          });
+          this.logger.info(request, `New client connection: ${clientId}, app: ${appName}`);
+          const logger = this.logger.child({ clientId, appName });
           const dedicatedClient = this.client.duplicate({
-            name: `${this.redisStreamKeyPrefix}snp-producer:${request.appName}:${request.clientId}`,
+            name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
             disableOfflineQueue: true,
           });
           const clientAbortController = new AbortController();
-          this.consumerClients.set(request.clientId, {
+          this.consumerClients.set(clientId, {
             client: dedicatedClient,
             abortController: clientAbortController,
           });
-          this.events.emit('perConsumerClientCreated', { clientId: request.clientId });
+          this.events.emit('perConsumerClientCreated', { clientId });
           dedicatedClient.on('error', (err: Error) => {
             if (!this.abortController.signal.aborted) {
               logger.error(err, `Redis error on dedicated client connection for client`);
@@ -442,9 +444,9 @@ export class RedisBroker {
           // starting position.
           const startSequenceNumber = await this.resolveClientStartMessageSequenceNumber(
             {
-              lastIndexBlockHash: request.lastIndexBlockHash,
-              lastBlockHeight: request.lastBlockHeight,
-              lastMessageId: request.lastMessageId,
+              lastIndexBlockHash,
+              lastBlockHeight,
+              lastMessageId,
             },
             logger
           );
@@ -458,9 +460,9 @@ export class RedisBroker {
           void this.streamMessagesToClient(
             {
               client: dedicatedClient,
-              appName: request.appName,
-              clientId: request.clientId,
-              selectedPaths: request.selectedPaths,
+              appName,
+              clientId,
+              selectedPaths,
             },
             startSequenceNumber,
             clientAbortController,
@@ -471,16 +473,16 @@ export class RedisBroker {
               if ((error as Error).message?.includes('NOGROUP')) {
                 logger.info(
                   error as Error,
-                  `Consumer group not found for client ${request.clientId} (likely pruned), cleaning up client connection`
+                  `Consumer group not found for client ${clientId} (likely pruned), cleaning up client connection`
                 );
               } else if (!this.abortController.signal.aborted) {
                 logger.error(
                   error as Error,
-                  `Error processing msgs for consumer stream for client ${request.clientId}, cleaning up client connection`
+                  `Error processing msgs for consumer stream for client ${clientId}, cleaning up client connection`
                 );
               }
-              const groupKey = this.getClientChainTipStreamGroupKey(request.clientId);
-              const clientStreamKey = this.getClientStreamKey(request.clientId);
+              const groupKey = this.getClientChainTipStreamGroupKey(clientId);
+              const clientStreamKey = this.getClientStreamKey(clientId);
               await this.client
                 .multi()
                 // Destroy the chain tip stream consumer group for this client
@@ -493,14 +495,14 @@ export class RedisBroker {
                     error = unwrapRedisMultiErrorReply(error as Error) ?? error;
                     logger.warn(
                       error,
-                      `Error cleaning up client connection for client ${request.clientId}`
+                      `Error cleaning up client connection for client ${clientId}`
                     );
                   }
                 });
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
-              this.consumerClients.delete(request.clientId);
+              this.consumerClients.delete(clientId);
               closeRedisClient(dedicatedClient).catch((error: unknown) => {
                 if (!this.abortController.signal.aborted) {
                   logger.warn(error as Error, `Error closing dedicated client connection`);

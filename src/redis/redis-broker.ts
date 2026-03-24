@@ -35,6 +35,16 @@ type StacksClient = {
   selectedPaths: SelectedMessagePaths;
 };
 
+/** A message from the connection stream that requests a new Stacks client connection. */
+type ConnectionRequest = {
+  clientId: string;
+  appName: string;
+  lastIndexBlockHash: string | null;
+  lastBlockHeight: string | null;
+  lastMessageId: string | null;
+  selectedPaths: SelectedMessagePaths;
+};
+
 /** Identifies an active Stacks client connection on the Redis broker. */
 type StacksClientConnection = StacksClient & {
   clientStreamKey: string;
@@ -394,46 +404,34 @@ export class RedisBroker {
       for (const request of connectionRequests as XReadGroupResponseEntry[]) {
         for (const msg of request.messages) {
           const msgId = msg.id;
-          const msgPayload = msg.message;
-          let clientId: string;
-          let appName: string;
-          let lastIndexBlockHash: string;
-          let lastBlockHeight: string;
-          let lastMessageId: string;
-          let selectedPaths: SelectedMessagePaths;
-          try {
-            clientId = msgPayload['client_id'];
-            lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
-            lastBlockHeight = msgPayload['last_block_height'] ?? '';
-            lastMessageId = msgPayload['last_message_id'] ?? '';
-            appName = msgPayload['app_name'];
-            selectedPaths =
-              msgPayload['selected_paths'] !== '*'
-                ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
-                : '*';
-          } catch (error) {
-            this.logger.error(
-              { error, msgId, msgPayload },
-              'Malformed connection request message; dropping it from stream'
+          const request = this.parseConnectionRequestMessage(msg.message);
+          if (!request) {
+            this.logger.warn(
+              { id: msgId, payload: msg.message },
+              'Ignoring malformed connection request message'
             );
             await listeningClient.xDel(connectionStreamKey, msgId);
             continue;
           }
-          this.logger.info(msgPayload, `New client connection: ${clientId}, app: ${appName}`);
 
-          const logger = this.logger.child({ clientId, appName });
+          this.logger.info(
+            request,
+            `New client connection: ${request.clientId}, app: ${request.appName}`
+          );
+          const logger = this.logger.child({
+            clientId: request.clientId,
+            appName: request.appName,
+          });
           const dedicatedClient = this.client.duplicate({
-            name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
+            name: `${this.redisStreamKeyPrefix}snp-producer:${request.appName}:${request.clientId}`,
             disableOfflineQueue: true,
           });
-
           const clientAbortController = new AbortController();
-          this.consumerClients.set(clientId, {
+          this.consumerClients.set(request.clientId, {
             client: dedicatedClient,
             abortController: clientAbortController,
           });
-          this.events.emit('perConsumerClientCreated', { clientId });
-
+          this.events.emit('perConsumerClientCreated', { clientId: request.clientId });
           dedicatedClient.on('error', (err: Error) => {
             if (!this.abortController.signal.aborted) {
               logger.error(err, `Redis error on dedicated client connection for client`);
@@ -443,7 +441,11 @@ export class RedisBroker {
           // Determine the starting message sequence number for this client by resolving its
           // starting position.
           const startSequenceNumber = await this.resolveClientStartMessageSequenceNumber(
-            { lastIndexBlockHash, lastBlockHeight, lastMessageId },
+            {
+              lastIndexBlockHash: request.lastIndexBlockHash,
+              lastBlockHeight: request.lastBlockHeight,
+              lastMessageId: request.lastMessageId,
+            },
             logger
           );
           // Once we have the starting position, delete the connection request message. This ensures
@@ -454,7 +456,12 @@ export class RedisBroker {
           // once. This also ensures that if the client connection is closed, the promise will be
           // rejected and the client will be cleaned up.
           void this.streamMessagesToClient(
-            { client: dedicatedClient, appName, clientId, selectedPaths },
+            {
+              client: dedicatedClient,
+              appName: request.appName,
+              clientId: request.clientId,
+              selectedPaths: request.selectedPaths,
+            },
             startSequenceNumber,
             clientAbortController,
             logger
@@ -464,16 +471,16 @@ export class RedisBroker {
               if ((error as Error).message?.includes('NOGROUP')) {
                 logger.info(
                   error as Error,
-                  `Consumer group not found for client ${clientId} (likely pruned), cleaning up client connection`
+                  `Consumer group not found for client ${request.clientId} (likely pruned), cleaning up client connection`
                 );
               } else if (!this.abortController.signal.aborted) {
                 logger.error(
                   error as Error,
-                  `Error processing msgs for consumer stream for client ${clientId}, cleaning up client connection`
+                  `Error processing msgs for consumer stream for client ${request.clientId}, cleaning up client connection`
                 );
               }
-              const groupKey = this.getClientChainTipStreamGroupKey(clientId);
-              const clientStreamKey = this.getClientStreamKey(clientId);
+              const groupKey = this.getClientChainTipStreamGroupKey(request.clientId);
+              const clientStreamKey = this.getClientStreamKey(request.clientId);
               await this.client
                 .multi()
                 // Destroy the chain tip stream consumer group for this client
@@ -486,14 +493,14 @@ export class RedisBroker {
                     error = unwrapRedisMultiErrorReply(error as Error) ?? error;
                     logger.warn(
                       error,
-                      `Error cleaning up client connection for client ${clientId}`
+                      `Error cleaning up client connection for client ${request.clientId}`
                     );
                   }
                 });
             })
             .finally(() => {
               // Close the dedicated client connection after handling the client
-              this.consumerClients.delete(clientId);
+              this.consumerClients.delete(request.clientId);
               closeRedisClient(dedicatedClient).catch((error: unknown) => {
                 if (!this.abortController.signal.aborted) {
                   logger.warn(error as Error, `Error closing dedicated client connection`);
@@ -596,6 +603,39 @@ export class RedisBroker {
           `Client demoted to backfill mode, resuming from sequence ${conn.lastStreamedSequenceNumber}`
         );
       }
+    }
+  }
+
+  /**
+   * Parses a connection request message from a Redis stream.
+   * @param msgPayload - The message payload to parse.
+   * @returns The parsed connection request message, or null if the message is malformed.
+   */
+  private parseConnectionRequestMessage(
+    msgPayload: Record<string, string | undefined>
+  ): ConnectionRequest | null {
+    try {
+      const clientId = msgPayload['client_id'];
+      if (!clientId) return null;
+      const appName = msgPayload['app_name'];
+      if (!appName) return null;
+      const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? null;
+      const lastBlockHeight = msgPayload['last_block_height'] ?? null;
+      const lastMessageId = msgPayload['last_message_id'] ?? null;
+      const selectedPaths =
+        msgPayload['selected_paths'] !== '*'
+          ? (JSON.parse(msgPayload['selected_paths'] ?? '') as MessagePath[])
+          : '*';
+      return {
+        clientId,
+        appName,
+        lastIndexBlockHash,
+        lastBlockHeight,
+        lastMessageId,
+        selectedPaths,
+      };
+    } catch (_error) {
+      return null;
     }
   }
 
@@ -908,9 +948,9 @@ export class RedisBroker {
    */
   private async resolveClientStartMessageSequenceNumber(
     startingPosition: {
-      lastIndexBlockHash: string;
-      lastBlockHeight: string;
-      lastMessageId: string;
+      lastIndexBlockHash: string | null;
+      lastBlockHeight: string | null;
+      lastMessageId: string | null;
     },
     logger: typeof this.logger
   ): Promise<string> {

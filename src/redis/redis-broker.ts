@@ -35,6 +35,16 @@ type StacksClient = {
   selectedPaths: SelectedMessagePaths;
 };
 
+/** A message from the connection stream that requests a new Stacks client connection. */
+type ConnectionRequest = {
+  clientId: string;
+  appName: string;
+  lastIndexBlockHash: string | null;
+  lastBlockHeight: string | null;
+  lastMessageId: string | null;
+  selectedPaths: SelectedMessagePaths;
+};
+
 /** Identifies an active Stacks client connection on the Redis broker. */
 type StacksClientConnection = StacksClient & {
   clientStreamKey: string;
@@ -394,19 +404,25 @@ export class RedisBroker {
       for (const request of connectionRequests as XReadGroupResponseEntry[]) {
         for (const msg of request.messages) {
           const msgId = msg.id;
-          const msgPayload = msg.message;
+          const request = this.parseConnectionRequestMessage(msg.message);
+          if (!request) {
+            this.logger.warn(
+              { id: msgId, payload: msg.message },
+              'Ignoring malformed connection request message'
+            );
+            await listeningClient.xDel(connectionStreamKey, msgId);
+            continue;
+          }
+          const {
+            clientId,
+            appName,
+            lastIndexBlockHash,
+            lastBlockHeight,
+            lastMessageId,
+            selectedPaths,
+          } = request;
 
-          const clientId = msgPayload['client_id'];
-          const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? '';
-          const lastBlockHeight = msgPayload['last_block_height'] ?? '';
-          const lastMessageId = msgPayload['last_message_id'] ?? '';
-          const appName = msgPayload['app_name'];
-          const selectedPaths: SelectedMessagePaths =
-            msgPayload['selected_paths'] !== '*'
-              ? (JSON.parse(msgPayload['selected_paths']) as MessagePath[])
-              : '*';
-          this.logger.info(msgPayload, `New client connection: ${clientId}, app: ${appName}`);
-
+          this.logger.info(request, `New client connection: ${clientId}, app: ${appName}`);
           const logger = this.logger.child({ clientId, appName });
           const dedicatedClient = this.client.duplicate({
             name: `${this.redisStreamKeyPrefix}snp-producer:${appName}:${clientId}`,
@@ -582,6 +598,39 @@ export class RedisBroker {
           `Client demoted to backfill mode, resuming from sequence ${conn.lastStreamedSequenceNumber}`
         );
       }
+    }
+  }
+
+  /**
+   * Parses a connection request message from a Redis stream.
+   * @param msgPayload - The message payload to parse.
+   * @returns The parsed connection request message, or null if the message is malformed.
+   */
+  private parseConnectionRequestMessage(
+    msgPayload: Record<string, string | undefined>
+  ): ConnectionRequest | null {
+    try {
+      const clientId = msgPayload['client_id'];
+      if (!clientId) return null;
+      const appName = msgPayload['app_name'];
+      if (!appName) return null;
+      const lastIndexBlockHash = msgPayload['last_index_block_hash'] ?? null;
+      const lastBlockHeight = msgPayload['last_block_height'] ?? null;
+      const lastMessageId = msgPayload['last_message_id'] ?? null;
+      const selectedPaths =
+        msgPayload['selected_paths'] !== '*'
+          ? (JSON.parse(msgPayload['selected_paths'] ?? '') as MessagePath[])
+          : '*';
+      return {
+        clientId,
+        appName,
+        lastIndexBlockHash,
+        lastBlockHeight,
+        lastMessageId,
+        selectedPaths,
+      };
+    } catch (_error) {
+      return null;
     }
   }
 
@@ -894,9 +943,9 @@ export class RedisBroker {
    */
   private async resolveClientStartMessageSequenceNumber(
     startingPosition: {
-      lastIndexBlockHash: string;
-      lastBlockHeight: string;
-      lastMessageId: string;
+      lastIndexBlockHash: string | null;
+      lastBlockHeight: string | null;
+      lastMessageId: string | null;
     },
     logger: typeof this.logger
   ): Promise<string> {

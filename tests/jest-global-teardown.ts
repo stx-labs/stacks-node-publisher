@@ -1,4 +1,4 @@
-import * as Docker from 'dockerode';
+import Docker from 'dockerode';
 
 // Jest global teardown to stop and remove the container
 export default async function teardown(): Promise<void> {

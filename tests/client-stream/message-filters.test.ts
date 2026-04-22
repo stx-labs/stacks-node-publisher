@@ -1,4 +1,4 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { waiter } from '@stacks/api-toolkit';
 import {
   createTestClient,
@@ -7,8 +7,8 @@ import {
   testWithFailCb,
   IntegrationTestEnv,
   withTimeout,
-} from '../utils';
-import { Message, MessagePath } from '../../client/src/messages';
+} from '../utils.js';
+import { Message, MessagePath } from '../../client/src/messages/index.js';
 
 describe('Message filters', () => {
   let env: IntegrationTestEnv;

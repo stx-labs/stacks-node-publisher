@@ -1,8 +1,8 @@
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
 import { once, EventEmitter } from 'node:events';
 import {
   closeTestClients,
@@ -11,10 +11,10 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from '../utils';
-import * as assert from 'node:assert';
+} from '../utils.js';
+import assert from 'node:assert';
 import { timeout, waiter } from '@stacks/api-toolkit';
-import { Message } from '../../client/src/messages';
+import { Message } from '../../client/src/messages/index.js';
 
 describe('Live-stream interrupt tests', () => {
   let db: PgStore;

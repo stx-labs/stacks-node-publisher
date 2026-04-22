@@ -1,8 +1,8 @@
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
 import {
   closeTestClients,
   createTestClient,
@@ -10,9 +10,9 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from '../utils';
+} from '../utils.js';
 import { waiter } from '@stacks/api-toolkit';
-import { Message } from '../../client/src/messages';
+import { Message } from '../../client/src/messages/index.js';
 
 describe('Multiple clients tests', () => {
   let db: PgStore;

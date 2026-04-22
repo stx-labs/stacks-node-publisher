@@ -1,4 +1,4 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { waiter } from '@stacks/api-toolkit';
 import {
   createTestClient,
@@ -8,8 +8,8 @@ import {
   IntegrationTestEnv,
   withTimeout,
   sendTestEvent,
-} from '../utils';
-import { Message } from '../../client/src/messages';
+} from '../utils.js';
+import { Message } from '../../client/src/messages/index.js';
 
 describe('Stream position lookup', () => {
   let env: IntegrationTestEnv;

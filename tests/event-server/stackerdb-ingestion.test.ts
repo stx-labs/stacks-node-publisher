@@ -1,4 +1,4 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { waiter } from '@stacks/api-toolkit';
 import {
   createTestClient,
@@ -7,7 +7,7 @@ import {
   testWithFailCb,
   IntegrationTestEnv,
   withTimeout,
-} from '../utils';
+} from '../utils.js';
 
 describe('Stackerdb ingestion tests', () => {
   let env: IntegrationTestEnv;

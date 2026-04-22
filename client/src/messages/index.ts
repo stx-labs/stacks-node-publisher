@@ -1,18 +1,18 @@
-import { AttachmentsNewMessage } from './attachments-new';
-import { DropMempoolTxMessage } from './drop-mempool-tx';
-import { NewBlockMessage } from './new-block';
-import { NewBurnBlockMessage } from './new-burn-block';
-import { NewMempoolTxMessage } from './new-mempool-tx';
-import { NewMicroblocksMessage } from './new-microblocks';
-import { StackerDbChunksMessage } from './stackerdb-chunks';
+import { AttachmentsNewMessage } from './attachments-new.js';
+import { DropMempoolTxMessage } from './drop-mempool-tx.js';
+import { NewBlockMessage } from './new-block.js';
+import { NewBurnBlockMessage } from './new-burn-block.js';
+import { NewMempoolTxMessage } from './new-mempool-tx.js';
+import { NewMicroblocksMessage } from './new-microblocks.js';
+import { StackerDbChunksMessage } from './stackerdb-chunks.js';
 
-export * from './attachments-new';
-export * from './drop-mempool-tx';
-export * from './new-block';
-export * from './new-burn-block';
-export * from './new-mempool-tx';
-export * from './new-microblocks';
-export * from './stackerdb-chunks';
+export * from './attachments-new.js';
+export * from './drop-mempool-tx.js';
+export * from './new-block.js';
+export * from './new-burn-block.js';
+export * from './new-mempool-tx.js';
+export * from './new-microblocks.js';
+export * from './stackerdb-chunks.js';
 
 /**
  * The path of the Stacks message as sent by the Stacks node.

@@ -6,8 +6,8 @@
       "request": "launch",
       "name": "Run",
       "runtimeArgs": [
-        "-r",
-        "ts-node/register"
+        "--import",
+        "tsx"
       ],
       "args": [
         "${workspaceFolder}/src/index.ts"
@@ -16,7 +16,6 @@
       "internalConsoleOptions": "openOnSessionStart",
       "env": {
         "NODE_ENV": "development",
-        "TS_NODE_SKIP_IGNORE": "true",
         "NETWORK": "testnet",
         "PGDATABASE": "postgres",
         "PGHOST": "127.0.0.1",

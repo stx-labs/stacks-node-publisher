@@ -1,19 +1,19 @@
-import * as assert from 'node:assert/strict';
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import assert from 'node:assert/strict';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
-import * as Docker from 'dockerode';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
+import Docker from 'dockerode';
 import {
   closeTestClients,
   createTestClient,
   redisFlushAllWithPrefix,
   sendTestEvent,
   testWithFailCb,
-} from '../utils';
+} from '../utils.js';
 import { timeout, waiter } from '@stacks/api-toolkit';
-import { Message } from '../../client/src/messages';
+import { Message } from '../../client/src/messages/index.js';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;

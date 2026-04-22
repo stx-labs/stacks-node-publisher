@@ -1,10 +1,10 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import {
   setupIntegrationTestEnv,
   teardownIntegrationTestEnv,
   IntegrationTestEnv,
   loadEventsDump,
-} from '../utils';
+} from '../utils.js';
 
 describe('Node synchronization', () => {
   let env: IntegrationTestEnv;

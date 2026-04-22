@@ -3,9 +3,9 @@ import { logger as defaultLogger, SERVER_VERSION } from '@stacks/api-toolkit';
 import { AddressInfo } from 'node:net';
 import { Registry } from 'prom-client';
 import PQueue from 'p-queue';
-import { PgStore } from '../pg/pg-store';
-import { RedisBroker } from '../redis/redis-broker';
-import { EventMetrics, registerEventMetrics } from './event-metrics';
+import { PgStore } from '../pg/pg-store.js';
+import { RedisBroker } from '../redis/redis-broker.js';
+import { EventMetrics, registerEventMetrics } from './event-metrics.js';
 
 export class EventObserverServer {
   readonly server: Server;

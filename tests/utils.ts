@@ -2,12 +2,12 @@ import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
 import * as zlib from 'node:zlib';
 import { Registry } from 'prom-client';
-import { StacksMessageStream, SelectedMessagePaths } from '../client/src';
-import { ENV } from '../src/env';
-import { EventObserverServer } from '../src/event-observer/event-server';
-import { PgStore } from '../src/pg/pg-store';
-import { RedisBroker } from '../src/redis/redis-broker';
-import { RedisClient } from '../src/redis/redis-types';
+import { StacksMessageStream, SelectedMessagePaths } from '../client/src/index.js';
+import { ENV } from '../src/env.js';
+import { EventObserverServer } from '../src/event-observer/event-server.js';
+import { PgStore } from '../src/pg/pg-store.js';
+import { RedisBroker } from '../src/redis/redis-broker.js';
+import { RedisClient } from '../src/redis/redis-types.js';
 
 export type IntegrationTestEnv = {
   db: PgStore;

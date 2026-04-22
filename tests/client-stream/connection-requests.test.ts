@@ -7,7 +7,7 @@ import {
   IntegrationTestEnv,
   sendTestEvent,
   withTimeout,
-} from '../utils';
+} from '../utils.js';
 
 describe('Connection request handling', () => {
   let env: IntegrationTestEnv;

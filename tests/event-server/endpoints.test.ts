@@ -1,18 +1,18 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
 import * as zlib from 'node:zlib';
-import * as assert from 'node:assert/strict';
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import assert from 'node:assert/strict';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
 import { createClient } from 'redis';
-import { StacksMessageStream } from '../../client/src';
+import { StacksMessageStream } from '../../client/src/index.js';
 import { timeout } from '@stacks/api-toolkit';
-import { buildPromServer } from '../../src/prom/prom-server';
+import { buildPromServer } from '../../src/prom/prom-server.js';
 import { FastifyInstance } from 'fastify';
-import { Message } from '../../client/src/messages';
+import { Message } from '../../client/src/messages/index.js';
 
 describe('Endpoint tests', () => {
   let db: PgStore;

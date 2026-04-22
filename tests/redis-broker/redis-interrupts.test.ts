@@ -1,11 +1,11 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
-import * as Docker from 'dockerode';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
+import Docker from 'dockerode';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import {
   closeTestClients,
@@ -14,8 +14,8 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from '../utils';
-import { Message } from '../../client/src/messages';
+} from '../utils.js';
+import { Message } from '../../client/src/messages/index.js';
 
 describe('Redis interrupt tests', () => {
   let db: PgStore;

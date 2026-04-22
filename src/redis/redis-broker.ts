@@ -1,8 +1,8 @@
 import { ClientClosedError, createClient, WatchError } from 'redis';
 import { logger as defaultLogger, timeout } from '@stacks/api-toolkit';
-import { ENV } from '../env';
-import { PgStore } from '../pg/pg-store';
-import { createTestHook, isTestEnv } from '../helpers';
+import { ENV } from '../env.js';
+import { PgStore } from '../pg/pg-store.js';
+import { createTestHook, isTestEnv } from '../helpers.js';
 import {
   closeRedisClient,
   destroyRedisClient,
@@ -10,11 +10,11 @@ import {
   XInfoGroupsResponse,
   XInfoStreamEntry,
   XReadGroupResponseEntry,
-} from './redis-types';
-import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util';
+} from './redis-types.js';
+import { unwrapRedisMultiErrorReply, xInfoStreamFull, xInfoStreamsFull } from './redis-util.js';
 import { EventEmitter } from 'node:events';
-import { SelectedMessagePaths } from '../../client/src';
-import { MessagePath } from '../../client/src/messages';
+import { SelectedMessagePaths } from '../../client/src/index.js';
+import { MessagePath } from '../../client/src/messages/index.js';
 
 /**
  * A Stacks message to be added to the Redis stream. These messages come from the Stacks node

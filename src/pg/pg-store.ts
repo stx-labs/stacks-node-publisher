@@ -1,4 +1,4 @@
-import { ENV } from '../env';
+import { ENV } from '../env.js';
 import {
   BasePgStore,
   PgConnectionArgs,
@@ -8,11 +8,11 @@ import {
   runMigrations,
   timeout,
 } from '@stacks/api-toolkit';
-import * as path from 'path';
-import { createTestHook, isTestEnv } from '../helpers';
-import { SelectedMessagePaths } from '../../client/src';
+import path from 'node:path';
+import { createTestHook, isTestEnv } from '../helpers.js';
+import { SelectedMessagePaths } from '../../client/src/index.js';
 
-export const MIGRATIONS_DIR = path.join(__dirname, '../../migrations');
+export const MIGRATIONS_DIR = path.join(import.meta.dirname, '../../migrations');
 
 /**
  * A single row in the `messages` table in the database.

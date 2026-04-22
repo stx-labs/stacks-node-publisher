@@ -223,7 +223,6 @@ export class EventObserverServer {
       this.promMetrics.reqCounter.inc(labels);
       this.promMetrics.reqDurationHistogram.observe(labels, durationInSeconds);
       this.promMetrics.reqDurationSummary.observe(labels, durationInSeconds);
-      this.promMetrics.lastEventReceivedTimestamp.set({ route: url.pathname }, Date.now() / 1000);
     };
 
     let body = '';
@@ -236,13 +235,12 @@ export class EventObserverServer {
     });
 
     req.on('end', () => {
-      // Body has been fully received
       this.promMetrics.eventPayloadBytes.observe(
         { route: eventPath },
         Buffer.byteLength(body, 'utf8')
       );
-      this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
-      void this.queue.add(async () => {
+      this.promMetrics.lastEventReceivedTimestamp.set({ route: eventPath }, Date.now() / 1000);
+      const task = this.queue.add(async () => {
         try {
           const result = await this.eventMessageHandler(eventPath, body, httpReceiveTimestamp);
           res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -257,9 +255,11 @@ export class EventObserverServer {
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Internal Server Error during message processing');
           logResponse(500);
-        } finally {
-          this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
         }
+      });
+      this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
+      void task.finally(() => {
+        this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
       });
     });
 
@@ -268,6 +268,7 @@ export class EventObserverServer {
         err,
         `Error reading event http POST payload: ${eventPath}, len: ${contentLength}`
       );
+      this.promMetrics.eventErrorsTotal.inc({ route: eventPath });
       res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end('Internal Server Error during message reading');
       logResponse(500);

@@ -237,12 +237,10 @@ export class EventObserverServer {
 
     req.on('end', () => {
       // Body has been fully received
-      if (contentLength) {
-        this.promMetrics.eventPayloadBytes.observe(
-          { route: eventPath },
-          parseInt(contentLength, 10)
-        );
-      }
+      this.promMetrics.eventPayloadBytes.observe(
+        { route: eventPath },
+        Buffer.byteLength(body, 'utf8')
+      );
       this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
       void this.queue.add(async () => {
         try {

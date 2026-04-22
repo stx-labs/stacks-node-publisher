@@ -1,7 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http';
 import { logger as defaultLogger, SERVER_VERSION } from '@stacks/api-toolkit';
 import { AddressInfo } from 'node:net';
-import { Counter, Histogram, Registry, Summary } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry, Summary } from 'prom-client';
 import PQueue from 'p-queue';
 import { PgStore } from '../pg/pg-store';
 import { RedisBroker } from '../redis/redis-broker';
@@ -59,6 +59,7 @@ export class EventObserverServer {
         indexBlockHash,
         parentIndexBlockHash
       );
+      this.promMetrics.blockActionTotal.inc({ action: blockResult.action });
       switch (blockResult.action) {
         case 'write': {
           if (this.skipMessages) {
@@ -66,10 +67,12 @@ export class EventObserverServer {
               `Resuming event ingestion at block ${blockHeight} ${indexBlockHash}, Stacks node has caught up`
             );
             this.skipMessages = false;
+            this.promMetrics.eventSkipMode.set(0);
           }
           if (!blockResult.sequence_number || !blockResult.timestamp) {
             throw new Error('Expected sequence_number and timestamp for written block');
           }
+          this.promMetrics.lastBlockHeight.set(blockHeight);
           timestamp = blockResult.timestamp;
           sequenceNumber = blockResult.sequence_number;
           resultMessage = `Inserted ${eventPath} message, seq: ${sequenceNumber}, block: ${blockHeight} ${indexBlockHash}`;
@@ -77,6 +80,7 @@ export class EventObserverServer {
         }
         case 'skip': {
           this.skipMessages = true;
+          this.promMetrics.eventSkipMode.set(1);
           return `Repeated block detected at ${blockHeight} ${indexBlockHash}, skipping until Stacks node catches up`;
         }
         case 'ignore': {
@@ -153,7 +157,65 @@ export class EventObserverServer {
       percentiles: [0.5, 0.9, 0.95, 0.99],
     });
 
-    return { reqCounter, reqDurationHistogram, reqDurationSummary };
+    const lastEventReceivedTimestamp = new Gauge({
+      registers: [this.promRegistry],
+      name: 'stacks_event_last_received_timestamp',
+      help: 'Unix timestamp of the last event received, labeled by route',
+      labelNames: ['route'],
+    });
+
+    const lastBlockHeight = new Gauge({
+      registers: [this.promRegistry],
+      name: 'stacks_last_block_height',
+      help: 'The latest block height received from /new_block events',
+    });
+
+    const blockActionTotal = new Counter({
+      registers: [this.promRegistry],
+      name: 'stacks_block_action_total',
+      help: 'Count of /new_block outcomes by action (write, skip, reject, ignore)',
+      labelNames: ['action'],
+    });
+
+    const eventSkipMode = new Gauge({
+      registers: [this.promRegistry],
+      name: 'stacks_event_skip_mode',
+      help: 'Whether the server is in skip mode (1) because the Stacks node is catching up',
+    });
+
+    const eventErrorsTotal = new Counter({
+      registers: [this.promRegistry],
+      name: 'stacks_event_errors_total',
+      help: 'Total event processing failures by route',
+      labelNames: ['route'],
+    });
+
+    const eventPayloadBytes = new Histogram({
+      registers: [this.promRegistry],
+      name: 'stacks_event_payload_bytes',
+      help: 'Size of incoming event payloads in bytes, labeled by route',
+      labelNames: ['route'],
+      buckets: [1_000, 10_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000],
+    });
+
+    const eventQueueDepth = new Gauge({
+      registers: [this.promRegistry],
+      name: 'stacks_event_queue_depth',
+      help: 'Current depth of the event processing queue',
+    });
+
+    return {
+      reqCounter,
+      reqDurationHistogram,
+      reqDurationSummary,
+      lastEventReceivedTimestamp,
+      lastBlockHeight,
+      blockActionTotal,
+      eventSkipMode,
+      eventErrorsTotal,
+      eventPayloadBytes,
+      eventQueueDepth,
+    };
   }
 
   async start({ host, port }: { host: string; port: number }): Promise<void> {
@@ -247,6 +309,7 @@ export class EventObserverServer {
       this.promMetrics.reqCounter.inc(labels);
       this.promMetrics.reqDurationHistogram.observe(labels, durationInSeconds);
       this.promMetrics.reqDurationSummary.observe(labels, durationInSeconds);
+      this.promMetrics.lastEventReceivedTimestamp.set({ route: url.pathname }, Date.now() / 1000);
     };
 
     let body = '';
@@ -260,6 +323,13 @@ export class EventObserverServer {
 
     req.on('end', () => {
       // Body has been fully received
+      if (contentLength) {
+        this.promMetrics.eventPayloadBytes.observe(
+          { route: eventPath },
+          parseInt(contentLength, 10)
+        );
+      }
+      this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
       void this.queue.add(async () => {
         try {
           const result = await this.eventMessageHandler(eventPath, body, httpReceiveTimestamp);
@@ -271,9 +341,12 @@ export class EventObserverServer {
             err,
             `Error processing event http POST payload: ${eventPath}, len: ${contentLength}`
           );
+          this.promMetrics.eventErrorsTotal.inc({ route: eventPath });
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Internal Server Error during message processing');
           logResponse(500);
+        } finally {
+          this.promMetrics.eventQueueDepth.set(this.queue.size + this.queue.pending);
         }
       });
     });

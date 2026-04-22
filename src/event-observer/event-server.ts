@@ -1,16 +1,16 @@
 import { createServer, IncomingMessage, ServerResponse, Server } from 'node:http';
 import { logger as defaultLogger, SERVER_VERSION } from '@stacks/api-toolkit';
 import { AddressInfo } from 'node:net';
-import { Counter, Gauge, Histogram, Registry, Summary } from 'prom-client';
+import { Registry } from 'prom-client';
 import PQueue from 'p-queue';
 import { PgStore } from '../pg/pg-store';
 import { RedisBroker } from '../redis/redis-broker';
+import { EventMetrics, registerEventMetrics } from './event-metrics';
 
 export class EventObserverServer {
   readonly server: Server;
   readonly logger = defaultLogger.child({ module: 'EventObserver' });
-  readonly promRegistry: Registry;
-  readonly promMetrics: ReturnType<typeof this.setupPromMetrics>;
+  readonly promMetrics: EventMetrics;
   readonly queue = new PQueue({ concurrency: 1 });
 
   readonly db: PgStore;
@@ -24,8 +24,7 @@ export class EventObserverServer {
   private skipMessages = false;
 
   constructor(args: { db: PgStore; redisBroker: RedisBroker; promRegistry: Registry }) {
-    this.promRegistry = args.promRegistry;
-    this.promMetrics = this.setupPromMetrics();
+    this.promMetrics = registerEventMetrics(args.promRegistry);
     this.server = createServer((req, res) => this.requestListener(req, res));
     this.db = args.db;
     this.redisBroker = args.redisBroker;
@@ -131,91 +130,6 @@ export class EventObserverServer {
     }
     const address = this.server.address() as AddressInfo;
     return `http://${address.address}:${address.port}`;
-  }
-
-  setupPromMetrics() {
-    const reqCounter = new Counter({
-      registers: [this.promRegistry],
-      name: 'http_request_duration_seconds_count',
-      help: 'Total number of HTTP requests',
-      labelNames: ['method', 'route', 'status_code'],
-    });
-
-    const reqDurationHistogram = new Histogram({
-      registers: [this.promRegistry],
-      name: 'http_request_duration_seconds_bucket',
-      help: 'request duration in seconds',
-      labelNames: ['method', 'route', 'status_code'],
-      buckets: [0.05, 0.1, 0.5, 1, 3, 5, 10],
-    });
-
-    const reqDurationSummary = new Summary({
-      registers: [this.promRegistry],
-      name: 'http_request_summary_seconds',
-      help: 'request duration in seconds summary',
-      labelNames: ['method', 'route', 'status_code'],
-      percentiles: [0.5, 0.9, 0.95, 0.99],
-    });
-
-    const lastEventReceivedTimestamp = new Gauge({
-      registers: [this.promRegistry],
-      name: 'stacks_event_last_received_timestamp',
-      help: 'Unix timestamp of the last event received, labeled by route',
-      labelNames: ['route'],
-    });
-
-    const lastBlockHeight = new Gauge({
-      registers: [this.promRegistry],
-      name: 'stacks_last_block_height',
-      help: 'The latest block height received from /new_block events',
-    });
-
-    const blockActionTotal = new Counter({
-      registers: [this.promRegistry],
-      name: 'stacks_block_action_total',
-      help: 'Count of /new_block outcomes by action (write, skip, reject, ignore)',
-      labelNames: ['action'],
-    });
-
-    const eventSkipMode = new Gauge({
-      registers: [this.promRegistry],
-      name: 'stacks_event_skip_mode',
-      help: 'Whether the server is in skip mode (1) because the Stacks node is catching up',
-    });
-
-    const eventErrorsTotal = new Counter({
-      registers: [this.promRegistry],
-      name: 'stacks_event_errors_total',
-      help: 'Total event processing failures by route',
-      labelNames: ['route'],
-    });
-
-    const eventPayloadBytes = new Histogram({
-      registers: [this.promRegistry],
-      name: 'stacks_event_payload_bytes',
-      help: 'Size of incoming event payloads in bytes, labeled by route',
-      labelNames: ['route'],
-      buckets: [1_000, 10_000, 100_000, 500_000, 1_000_000, 5_000_000, 10_000_000],
-    });
-
-    const eventQueueDepth = new Gauge({
-      registers: [this.promRegistry],
-      name: 'stacks_event_queue_depth',
-      help: 'Current depth of the event processing queue',
-    });
-
-    return {
-      reqCounter,
-      reqDurationHistogram,
-      reqDurationSummary,
-      lastEventReceivedTimestamp,
-      lastBlockHeight,
-      blockActionTotal,
-      eventSkipMode,
-      eventErrorsTotal,
-      eventPayloadBytes,
-      eventQueueDepth,
-    };
   }
 
   async start({ host, port }: { host: string; port: number }): Promise<void> {

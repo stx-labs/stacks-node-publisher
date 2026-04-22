@@ -97,7 +97,9 @@ describe('Endpoint tests', () => {
     const body = await res.text();
 
     const metricValue = (line: string): number => {
-      const match = body.match(new RegExp(`^${line.replace(/[{}()|]/g, '\\$&')}\\s+(.+)$`, 'm'));
+      const match = body.match(
+        new RegExp(`^${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(.+)$`, 'm')
+      );
       expect(match).not.toBeNull();
       return parseFloat(match![1]);
     };

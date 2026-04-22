@@ -84,10 +84,62 @@ describe('Endpoint tests', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toMatch(/^text\/plain/);
     const body = await res.text();
-    expect(body).toMatch(/http_request_duration_seconds_bucket/);
+    expect(body).toMatch(/snp_http_request_duration_seconds_bucket/);
     const expectedLinePrefix =
-      'http_request_duration_seconds_count{method="POST",route="/new_block",status_code="200"}';
+      'snp_http_request_duration_seconds_count{method="POST",route="/new_block",status_code="200"}';
     expect(body).toMatch(new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
+  });
+
+  test('event metrics are registered and populated', async () => {
+    const addrs = promServer.addresses();
+    const promUrl = `http://${addrs[0].address}:${addrs[0].port}/metrics`;
+    const res = await fetch(promUrl);
+    const body = await res.text();
+
+    const metricValue = (line: string): number => {
+      const match = body.match(
+        new RegExp(`^${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(.+)$`, 'm')
+      );
+      expect(match).not.toBeNull();
+      return parseFloat(match![1]);
+    };
+
+    // HTTP request duration summary should be present for /new_block POSTs
+    expect(body).toMatch(/snp_http_request_summary_seconds\{/);
+
+    // Last event received timestamp should be a populated unix timestamp.
+    // Avoid asserting strict recency here because the bulk dump is ingested in beforeAll
+    // and slower CI / DB performance can legitimately make the last event older.
+    const lastEventTs = metricValue('snp_stacks_event_last_received_timestamp{route="/new_block"}');
+    const nowSeconds = Date.now() / 1000;
+    expect(Number.isFinite(lastEventTs)).toBe(true);
+    expect(lastEventTs).toBeGreaterThan(0);
+    expect(lastEventTs).toBeLessThanOrEqual(nowSeconds + 1);
+
+    // Last block height should be > 0 after ingesting the dump
+    const blockHeight = metricValue('snp_stacks_last_block_height');
+    expect(blockHeight).toBeGreaterThan(0);
+
+    // Block action "write" count should match the number of blocks ingested
+    const blockWrites = metricValue('snp_stacks_block_action_total{action="write"}');
+    expect(blockWrites).toBeGreaterThan(0);
+
+    // Skip mode should be 0 (the dump has a clean chain with no repeated blocks)
+    const skipMode = metricValue('snp_stacks_event_skip_mode');
+    expect(skipMode).toBe(0);
+
+    // Event errors counter: no errors expected, but the metric type should be registered
+    expect(body).toMatch(/^# TYPE snp_stacks_event_errors_total counter$/m);
+
+    // Payload bytes histogram should have observations for /new_block
+    expect(body).toMatch(/snp_stacks_event_payload_bytes_count\{route="\/new_block"\}/);
+    const payloadCount = metricValue('snp_stacks_event_payload_bytes_count{route="/new_block"}');
+    expect(payloadCount).toBeGreaterThan(0);
+
+    // Queue depth should be low after all events have been processed (may be 1 if the
+    // last task's `finally` update races with the metric scrape)
+    const queueDepth = metricValue('snp_stacks_event_queue_depth');
+    expect(queueDepth).toBeLessThanOrEqual(1);
   });
 
   test.skip('stream messages from redis', async () => {

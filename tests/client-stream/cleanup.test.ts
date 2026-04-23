@@ -9,6 +9,7 @@ import {
   closeTestClients,
   createTestClient,
   migrateDown,
+  redisFlushAllWithPrefix,
   sendTestEvent,
   testWithFailCb,
   withTimeout,
@@ -43,6 +44,7 @@ describe('Cleanup tests', () => {
     await eventServer.close();
     await migrateDown();
     await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
   });
 

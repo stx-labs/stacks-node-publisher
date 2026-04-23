@@ -13,6 +13,7 @@ import { timeout } from '@stacks/api-toolkit';
 import { buildPromServer } from '../../src/prom/prom-server.js';
 import { FastifyInstance } from 'fastify';
 import { Message } from '../../client/src/messages/index.js';
+import { migrateDown, redisFlushAllWithPrefix } from '../utils.js';
 import { before, after, test, describe } from 'node:test';
 
 describe('Endpoint tests', () => {
@@ -61,9 +62,11 @@ describe('Endpoint tests', () => {
 
   after(async () => {
     await eventServer.close();
-    await db.close();
-    await redisBroker.close();
     await promServer.close();
+    await migrateDown();
+    await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
+    await redisBroker.close();
   });
 
   test('status endpoint check', async () => {

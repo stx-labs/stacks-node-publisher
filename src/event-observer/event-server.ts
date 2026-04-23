@@ -157,6 +157,9 @@ export class EventObserverServer {
           resolve();
         }
       });
+      // Terminate keep-alive connections immediately so server.close() doesn't
+      // block waiting for idle connection timeouts.
+      this.server.closeAllConnections();
     });
     await this.queue.onEmpty();
   }

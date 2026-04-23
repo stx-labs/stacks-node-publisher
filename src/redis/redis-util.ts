@@ -1,5 +1,5 @@
 import { ErrorReply, MultiErrorReply } from 'redis';
-import type { RedisClient } from './redis-types';
+import type { RedisClient } from './redis-types.js';
 
 /** If the error is a MultiErrorReply instance with 1 entry, extract and return that, otherwise return null */
 export function unwrapRedisMultiErrorReply(error: Error) {

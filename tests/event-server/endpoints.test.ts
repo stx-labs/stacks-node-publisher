@@ -1,18 +1,20 @@
 import * as fs from 'node:fs';
 import * as readline from 'node:readline/promises';
 import * as zlib from 'node:zlib';
-import * as assert from 'node:assert/strict';
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import assert from 'node:assert/strict';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
 import { createClient } from 'redis';
-import { StacksMessageStream } from '../../client/src';
+import { StacksMessageStream } from '../../client/src/index.js';
 import { timeout } from '@stacks/api-toolkit';
-import { buildPromServer } from '../../src/prom/prom-server';
+import { buildPromServer } from '../../src/prom/prom-server.js';
 import { FastifyInstance } from 'fastify';
-import { Message } from '../../client/src/messages';
+import { Message } from '../../client/src/messages/index.js';
+import { migrateDown, redisFlushAllWithPrefix } from '../utils.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Endpoint tests', () => {
   let db: PgStore;
@@ -20,7 +22,7 @@ describe('Endpoint tests', () => {
   let eventServer: EventObserverServer;
   let promServer: FastifyInstance;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({
@@ -43,7 +45,6 @@ describe('Endpoint tests', () => {
       input: fs.createReadStream(payloadDumpFile).pipe(zlib.createGunzip()),
       crlfDelay: Infinity,
     });
-    const spyInfoLog = jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}); // Suppress noisy logs during bulk insertion test
     for await (const line of rl) {
       const [_id, timestamp, path, payload] = line.split('\t');
       // use fetch to POST the payload to the event server
@@ -57,37 +58,36 @@ describe('Endpoint tests', () => {
       }
     }
     rl.close();
-    spyInfoLog.mockRestore();
   });
 
-  afterAll(async () => {
+  after(async () => {
     await eventServer.close();
-    await db.close();
-    await redisBroker.close();
     await promServer.close();
+    await migrateDown();
+    await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
+    await redisBroker.close();
   });
 
   test('status endpoint check', async () => {
     const res = await fetch(eventServer.url + '/status');
-    expect(res.status).toBe(200);
+    assert.strictEqual(res.status, 200);
     const body = await res.json();
-    expect(body).toMatchObject({
-      server_version: expect.stringMatching(/^stacks-node-publisher v/),
-      status: 'ready',
-    });
+    assert.match(body.server_version, /^stacks-node-publisher v/);
+    assert.strictEqual(body.status, 'ready');
   });
 
   test('prom server test', async () => {
     const addrs = promServer.addresses();
     const promUrl = `http://${addrs[0].address}:${addrs[0].port}/metrics`;
     const res = await fetch(promUrl);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toMatch(/^text\/plain/);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type')!, /^text\/plain/);
     const body = await res.text();
-    expect(body).toMatch(/snp_http_request_duration_seconds_bucket/);
+    assert.match(body, /snp_http_request_duration_seconds_bucket/);
     const expectedLinePrefix =
       'snp_http_request_duration_seconds_count{method="POST",route="/new_block",status_code="200"}';
-    expect(body).toMatch(new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
+    assert.match(body, new RegExp(`^${expectedLinePrefix}\\s*\\d+$`, 'm'));
   });
 
   test('event metrics are registered and populated', async () => {
@@ -100,46 +100,46 @@ describe('Endpoint tests', () => {
       const match = body.match(
         new RegExp(`^${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s+(.+)$`, 'm')
       );
-      expect(match).not.toBeNull();
+      assert.notStrictEqual(match, null);
       return parseFloat(match![1]);
     };
 
     // HTTP request duration summary should be present for /new_block POSTs
-    expect(body).toMatch(/snp_http_request_summary_seconds\{/);
+    assert.match(body, /snp_http_request_summary_seconds\{/);
 
     // Last event received timestamp should be a populated unix timestamp.
     // Avoid asserting strict recency here because the bulk dump is ingested in beforeAll
     // and slower CI / DB performance can legitimately make the last event older.
     const lastEventTs = metricValue('snp_stacks_event_last_received_timestamp{route="/new_block"}');
     const nowSeconds = Date.now() / 1000;
-    expect(Number.isFinite(lastEventTs)).toBe(true);
-    expect(lastEventTs).toBeGreaterThan(0);
-    expect(lastEventTs).toBeLessThanOrEqual(nowSeconds + 1);
+    assert.strictEqual(Number.isFinite(lastEventTs), true);
+    assert.ok(lastEventTs > 0);
+    assert.ok(lastEventTs <= nowSeconds + 1);
 
     // Last block height should be > 0 after ingesting the dump
     const blockHeight = metricValue('snp_stacks_last_block_height');
-    expect(blockHeight).toBeGreaterThan(0);
+    assert.ok(blockHeight > 0);
 
     // Block action "write" count should match the number of blocks ingested
     const blockWrites = metricValue('snp_stacks_block_action_total{action="write"}');
-    expect(blockWrites).toBeGreaterThan(0);
+    assert.ok(blockWrites > 0);
 
     // Skip mode should be 0 (the dump has a clean chain with no repeated blocks)
     const skipMode = metricValue('snp_stacks_event_skip_mode');
-    expect(skipMode).toBe(0);
+    assert.strictEqual(skipMode, 0);
 
     // Event errors counter: no errors expected, but the metric type should be registered
-    expect(body).toMatch(/^# TYPE snp_stacks_event_errors_total counter$/m);
+    assert.match(body, /^# TYPE snp_stacks_event_errors_total counter$/m);
 
     // Payload bytes histogram should have observations for /new_block
-    expect(body).toMatch(/snp_stacks_event_payload_bytes_count\{route="\/new_block"\}/);
+    assert.match(body, /snp_stacks_event_payload_bytes_count\{route="\/new_block"\}/);
     const payloadCount = metricValue('snp_stacks_event_payload_bytes_count{route="/new_block"}');
-    expect(payloadCount).toBeGreaterThan(0);
+    assert.ok(payloadCount > 0);
 
     // Queue depth should be low after all events have been processed (may be 1 if the
     // last task's `finally` update races with the metric scrape)
     const queueDepth = metricValue('snp_stacks_event_queue_depth');
-    expect(queueDepth).toBeLessThanOrEqual(1);
+    assert.ok(queueDepth <= 1);
   });
 
   test.skip('stream messages from redis', async () => {
@@ -151,7 +151,7 @@ describe('Endpoint tests', () => {
     const streamKey = ENV.REDIS_STREAM_KEY_PREFIX + 'all';
 
     const queuedMessageCount = await appRedisClient.xLen(streamKey);
-    expect(queuedMessageCount).toBeGreaterThan(0);
+    assert.ok(queuedMessageCount > 0);
 
     let lastMsgId = '0';
     let messagedProcessed = 0;
@@ -161,13 +161,13 @@ describe('Endpoint tests', () => {
         { BLOCK: 3000, COUNT: 1 }
       )) as { name: string; messages: { id: string; message: Record<string, string> }[] }[] | null;
       assert.ok(streamMessages);
-      expect(streamMessages).toHaveLength(1);
-      expect(streamMessages[0].messages).toHaveLength(1);
+      assert.strictEqual(streamMessages.length, 1);
+      assert.strictEqual(streamMessages[0].messages.length, 1);
       lastMsgId = streamMessages[0].messages[0].id;
       messagedProcessed++;
     }
-    expect(messagedProcessed).toBe(queuedMessageCount);
-    expect(lastMsgId).toBe(`${queuedMessageCount}-0`);
+    assert.strictEqual(messagedProcessed, queuedMessageCount);
+    assert.strictEqual(lastMsgId, `${queuedMessageCount}-0`);
     await appRedisClient.quit();
   });
 
@@ -234,16 +234,16 @@ describe('Endpoint tests', () => {
     client.start(
       async () => Promise.resolve(lastMsgId === '0' ? null : { messageId: lastMsgId }),
       async (id: string, timestamp: string, message: Message) => {
-        expect(id).toEqual(`${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
+        assert.strictEqual(id, `${parseInt(lastMsgId.split('-')[0]) + 1}-0`);
         lastMsgId = id;
 
-        expect(typeof message.path).toBe('string');
-        expect(message.path).not.toBe('');
+        assert.strictEqual(typeof message.path, 'string');
+        assert.notStrictEqual(message.path, '');
 
-        expect(typeof message.payload).toBe('object');
-        expect(Object.entries(message.payload as object).length).toBeGreaterThan(0);
+        assert.strictEqual(typeof message.payload, 'object');
+        assert.ok(Object.entries(message.payload as object).length > 0);
 
-        expect(parseInt(timestamp)).toBeGreaterThanOrEqual(lastTimestamp);
+        assert.ok(parseInt(timestamp) >= lastTimestamp);
         lastTimestamp = parseInt(timestamp);
 
         messagesProcessed++;
@@ -252,6 +252,6 @@ describe('Endpoint tests', () => {
     );
     await timeout(500);
     await client.stop();
-    expect(messagesProcessed).toBeGreaterThan(0);
+    assert.ok(messagesProcessed > 0);
   });
 });

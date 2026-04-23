@@ -2,10 +2,10 @@ import { createClient, RedisClientType } from 'redis';
 import { logger as defaultLogger, timeout, waiter, Waiter } from '@stacks/api-toolkit';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { Message, MessagePath } from './messages';
-import { MessageIngestionError, NoMessageTimeoutError } from './errors';
+import { Message, MessagePath } from './messages/index.js';
+import { MessageIngestionError, NoMessageTimeoutError } from './errors.js';
 
-export * from './messages';
+export * from './messages/index.js';
 
 /**
  * The starting position for the message stream. Can be either an index block hash with block height

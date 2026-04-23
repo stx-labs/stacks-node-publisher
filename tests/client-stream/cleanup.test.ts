@@ -1,25 +1,29 @@
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import assert from 'node:assert/strict';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
-import { StacksMessageStream } from '../../client/src';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
+import { StacksMessageStream } from '../../client/src/index.js';
 import {
   closeTestClients,
   createTestClient,
+  migrateDown,
+  redisFlushAllWithPrefix,
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from '../utils';
+} from '../utils.js';
 import { once } from 'node:events';
 import { timeout, waiter } from '@stacks/api-toolkit';
+import { before, after, test, describe } from 'node:test';
 
 describe('Cleanup tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     ENV.CLEANUP_INTERVAL_MS = 120_000;
@@ -35,10 +39,12 @@ describe('Cleanup tests', () => {
     await eventServer.start({ port: 0, host: '127.0.0.1' });
   });
 
-  afterAll(async () => {
+  after(async () => {
     await closeTestClients();
     await eventServer.close();
+    await migrateDown();
     await db.close();
+    await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
   });
 
@@ -47,13 +53,13 @@ describe('Cleanup tests', () => {
       await testWithFailCb(async fail => {
         // Global stream not yet initialized
         let trimResult = await redisBroker.trimChainTipStream();
-        expect(trimResult).toEqual({ result: 'no_stream_exists' });
+        assert.deepStrictEqual(trimResult, { result: 'no_stream_exists' });
 
         await sendTestEvent(eventServer);
 
         // No consumers, expect trim to maxlen
         trimResult = await redisBroker.trimChainTipStream();
-        expect(trimResult).toEqual({ result: 'trimmed_maxlen' });
+        assert.deepStrictEqual(trimResult, { result: 'trimmed_maxlen' });
 
         // Create a new live-streaming client
         const lastDbMsg = await db.getLastMessage();
@@ -75,7 +81,7 @@ describe('Cleanup tests', () => {
 
         // Expect trim to minid of the last msg received
         trimResult = await redisBroker.trimChainTipStream();
-        expect(trimResult).toEqual({ result: 'trimmed_minid', id: lastClientMsgId });
+        assert.deepStrictEqual(trimResult, { result: 'trimmed_minid', id: lastClientMsgId });
         await client.stop();
 
         // Create a client that will try to create a new consumer group on the chain tip stream
@@ -93,7 +99,7 @@ describe('Cleanup tests', () => {
         // Expect the trim to be aborted.
         trimResult = await redisBroker.trimChainTipStream();
         await newClient.stop();
-        expect(trimResult?.result).toBe('aborted');
+        assert.strictEqual(trimResult?.result, 'aborted');
       });
     });
   });
@@ -133,11 +139,11 @@ describe('Cleanup tests', () => {
 
       // Verify the consumer group was destroyed on the chain tip stream
       const groups = await redisBroker.client.xInfoGroups(redisBroker.chainTipStreamKey);
-      expect(groups.some(g => g.name === groupKey)).toBe(false);
+      assert.strictEqual(groups.some(g => g.name === groupKey), false);
 
       // Verify client stream was deleted
       const exists = await redisBroker.client.exists(clientStreamKey);
-      expect(exists).toBe(0);
+      assert.strictEqual(exists, 0);
     });
 
     test('dangling client stream is pruned', async () => {
@@ -154,7 +160,7 @@ describe('Cleanup tests', () => {
 
       // Verify client stream was deleted
       const exists = await redisBroker.client.exists(clientStreamKey);
-      expect(exists).toBe(0);
+      assert.strictEqual(exists, 0);
     });
 
     test('idle client stream is pruned', async () => {
@@ -196,7 +202,7 @@ describe('Cleanup tests', () => {
 
       // Verify client stream was deleted
       const exists = await redisBroker.client.exists(clientStreamKey);
-      expect(exists).toBe(0);
+      assert.strictEqual(exists, 0);
     });
 
     test('client reconnects after no-message timeout on orphaned stream', async () => {
@@ -224,12 +230,12 @@ describe('Cleanup tests', () => {
       // no-message timeout fires, the client should reconnect with a new clientId.
       const noMessageTimeoutReconnect = once(client.events, 'noMessageTimeoutReconnect');
       const [{ clientId: noMessageTimeoutClientId }] = await withTimeout(noMessageTimeoutReconnect);
-      expect(noMessageTimeoutClientId).toBe(firstClientId);
+      assert.strictEqual(noMessageTimeoutClientId, firstClientId);
 
       // The client should reconnect with a new clientId.
       const newConnectionAnnounced = once(client.events, 'connectionAnnounced');
       const [{ clientId: newClientId }] = await withTimeout(newConnectionAnnounced);
-      expect(newClientId).not.toBe(firstClientId);
+      assert.notStrictEqual(newClientId, firstClientId);
 
       await client.stop();
     });
@@ -276,7 +282,7 @@ describe('Cleanup tests', () => {
         await redisBroker.cleanup();
         const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
         const exists = await redisBroker.client.exists(clientStreamKey);
-        expect(exists).toBe(1);
+        assert.strictEqual(exists, 1);
 
         stall.finish();
         await client.stop();
@@ -324,7 +330,7 @@ describe('Cleanup tests', () => {
         // Verify the client stream still exists
         const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
         const exists = await redisBroker.client.exists(clientStreamKey);
-        expect(exists).toBe(1);
+        assert.strictEqual(exists, 1);
 
         await client.stop();
       });

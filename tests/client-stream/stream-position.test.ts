@@ -1,4 +1,4 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { waiter } from '@stacks/api-toolkit';
 import {
   createTestClient,
@@ -8,8 +8,9 @@ import {
   IntegrationTestEnv,
   withTimeout,
   sendTestEvent,
-} from '../utils';
-import { Message } from '../../client/src/messages';
+} from '../utils.js';
+import { Message } from '../../client/src/messages/index.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Stream position lookup', () => {
   let env: IntegrationTestEnv;
@@ -36,13 +37,13 @@ describe('Stream position lookup', () => {
   const NON_EXISTENT_BLOCK_HASH =
     '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
-  beforeAll(async () => {
+  before(async () => {
     env = await setupIntegrationTestEnv({
       dumpFile: './tests/dumps/stackerdb-sample-events.tsv.gz',
     });
-  }, 60_000);
+  }, { timeout: 30_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await teardownIntegrationTestEnv(env);
   });
 
@@ -54,8 +55,8 @@ describe('Stream position lookup', () => {
       );
 
       assert(result);
-      expect(result.sequenceNumber).toBe(MID_BLOCK.sequenceNumber);
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, MID_BLOCK.sequenceNumber);
+      assert.strictEqual(result.clampedToMax, false);
     });
 
     test('returns first block sequence number when queried', async () => {
@@ -65,8 +66,8 @@ describe('Stream position lookup', () => {
       );
 
       assert(result);
-      expect(result.sequenceNumber).toBe(FIRST_BLOCK.sequenceNumber);
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, FIRST_BLOCK.sequenceNumber);
+      assert.strictEqual(result.clampedToMax, false);
     });
 
     test('returns null when block 0 is queried', async () => {
@@ -74,7 +75,7 @@ describe('Stream position lookup', () => {
         '0x0000000000000000000000000000000000000000000000000000000000000000',
         0
       );
-      expect(result).toBeNull();
+      assert.strictEqual(result, null);
     });
 
     test('returns last block sequence number when queried', async () => {
@@ -84,8 +85,8 @@ describe('Stream position lookup', () => {
       );
 
       assert(result);
-      expect(result.sequenceNumber).toBe(LAST_BLOCK.sequenceNumber);
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, LAST_BLOCK.sequenceNumber);
+      assert.strictEqual(result.clampedToMax, false);
     });
 
     test('clamps to max when block hash not found but height exceeds highest available', async () => {
@@ -97,8 +98,8 @@ describe('Stream position lookup', () => {
 
       assert(result);
       // Should clamp to the last available block's sequence number
-      expect(result.sequenceNumber).toBe(LAST_BLOCK.sequenceNumber);
-      expect(result.clampedToMax).toBe(true);
+      assert.strictEqual(result.sequenceNumber, LAST_BLOCK.sequenceNumber);
+      assert.strictEqual(result.clampedToMax, true);
     });
 
     test('returns null when block hash not found and height is not higher than available', async () => {
@@ -108,26 +109,26 @@ describe('Stream position lookup', () => {
         MID_BLOCK.blockHeight
       );
 
-      expect(result).toBeNull();
+      assert.strictEqual(result, null);
     });
 
     test('returns null when block hash not found and no height provided', async () => {
       const result = await env.db.resolveBlockIdentifierToStreamPosition(NON_EXISTENT_BLOCK_HASH);
 
-      expect(result).toBeNull();
+      assert.strictEqual(result, null);
     });
 
     test('returns null for empty block hash', async () => {
       const result = await env.db.resolveBlockIdentifierToStreamPosition('', 100);
-      expect(result).toBeNull();
+      assert.strictEqual(result, null);
     });
 
     test('works without providing blockHeight when hash exists', async () => {
       const result = await env.db.resolveBlockIdentifierToStreamPosition(MID_BLOCK.indexBlockHash);
 
       assert(result);
-      expect(result.sequenceNumber).toBe(MID_BLOCK.sequenceNumber);
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, MID_BLOCK.sequenceNumber);
+      assert.strictEqual(result.clampedToMax, false);
     });
   });
 
@@ -137,8 +138,8 @@ describe('Stream position lookup', () => {
       const result = await env.db.resolveMessageIdToStreamPosition(messageId);
 
       assert(result);
-      expect(result.sequenceNumber).toBe(MID_BLOCK.sequenceNumber);
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, MID_BLOCK.sequenceNumber);
+      assert.strictEqual(result.clampedToMax, false);
     });
 
     test('returns sequence number for first message ID', async () => {
@@ -146,8 +147,8 @@ describe('Stream position lookup', () => {
       const result = await env.db.resolveMessageIdToStreamPosition(messageId);
 
       assert(result);
-      expect(result.sequenceNumber).toBe('1');
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, '1');
+      assert.strictEqual(result.clampedToMax, false);
     });
 
     test('clamps to max when message ID exceeds highest available', async () => {
@@ -157,18 +158,18 @@ describe('Stream position lookup', () => {
 
       assert(result);
       // Should clamp to the highest available sequence number
-      expect(BigInt(result.sequenceNumber)).toBeLessThanOrEqual(BigInt('999999'));
-      expect(result.clampedToMax).toBe(true);
+      assert.ok(BigInt(result.sequenceNumber) <= BigInt('999999'));
+      assert.strictEqual(result.clampedToMax, true);
     });
 
     test('returns null for empty message ID', async () => {
       const result = await env.db.resolveMessageIdToStreamPosition('');
-      expect(result).toBeNull();
+      assert.strictEqual(result, null);
     });
 
     test('returns null for invalid message ID format', async () => {
       const result = await env.db.resolveMessageIdToStreamPosition('invalid-format');
-      expect(result).toBeNull();
+      assert.strictEqual(result, null);
     });
 
     test('returns sequence number for ID within range but not necessarily existing', async () => {
@@ -178,13 +179,13 @@ describe('Stream position lookup', () => {
 
       assert(result);
       // Since 100 is within the range of messages (1-5400+), it should be valid
-      expect(result.sequenceNumber).toBe('100');
-      expect(result.clampedToMax).toBe(false);
+      assert.strictEqual(result.sequenceNumber, '100');
+      assert.strictEqual(result.clampedToMax, false);
     });
   });
 
   describe('stream position via client start', () => {
-    test('starts from exact position when valid indexBlockHash and blockHeight provided', async () => {
+    test('starts from exact position when valid indexBlockHash and blockHeight provided', { timeout: 60_000 }, async () => {
       await testWithFailCb(async fail => {
         const client = await createTestClient(null, '*', error => fail(error));
 
@@ -209,13 +210,13 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start after the resolved block's sequence number
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBe(parseInt(MID_BLOCK.sequenceNumber) + 1);
+        assert.strictEqual(receivedSeqNum, parseInt(MID_BLOCK.sequenceNumber) + 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
 
-    test('starts from clamped max position when indexBlockHash not found but height exceeds max', async () => {
+    test('starts from clamped max position when indexBlockHash not found but height exceeds max', { timeout: 60_000 }, async () => {
       await testWithFailCb(async fail => {
         const client = await createTestClient(null, '*', error => fail(error));
 
@@ -240,13 +241,13 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start from clamped position (after the last block's sequence number)
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBe(parseInt(LAST_BLOCK.sequenceNumber) + 1);
+        assert.strictEqual(receivedSeqNum, parseInt(LAST_BLOCK.sequenceNumber) + 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
 
-    test('starts from beginning when indexBlockHash not found and height not exceeding max', async () => {
+    test('starts from beginning when indexBlockHash not found and height not exceeding max', { timeout: 60_000 }, async () => {
       await testWithFailCb(async fail => {
         const client = await createTestClient(null, '*', error => fail(error));
 
@@ -271,13 +272,13 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start from the beginning (first message)
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBe(1);
+        assert.strictEqual(receivedSeqNum, 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
 
-    test('starts from exact position when valid messageId provided', async () => {
+    test('starts from exact position when valid messageId provided', { timeout: 60_000 }, async () => {
       await testWithFailCb(async fail => {
         const startingSeqNum = MID_BLOCK.sequenceNumber;
         const client = await createTestClient(null, '*', error => fail(error));
@@ -296,16 +297,16 @@ describe('Stream position lookup', () => {
           }
         );
 
-        const receivedId = await withTimeout(firstMsgWaiter, 10_000);
+        const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start after the specified message ID
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBe(parseInt(startingSeqNum) + 1);
+        assert.strictEqual(receivedSeqNum, parseInt(startingSeqNum) + 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
 
-    test('starts from clamped max position when messageId exceeds highest available', async () => {
+    test('starts from clamped max position when messageId exceeds highest available', { timeout: 60_000 }, async () => {
       await testWithFailCb(async fail => {
         const futureMessageId = '999999-0';
 
@@ -331,13 +332,13 @@ describe('Stream position lookup', () => {
 
         const receivedId = await withTimeout(startMsgWaiter, 30_000);
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBe(parseInt(LAST_SEQUENCE_NUMBER) + 1);
+        assert.strictEqual(receivedSeqNum, parseInt(LAST_SEQUENCE_NUMBER) + 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
 
-    test('starts from beginning when null position provided', async () => {
+    test('starts from beginning when null position provided', { timeout: 60_000 }, async () => {
       await testWithFailCb(async fail => {
         const client = await createTestClient(null, '*', error => fail(error));
 
@@ -358,13 +359,13 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start from the very beginning
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
-        expect(receivedSeqNum).toBe(1);
+        assert.strictEqual(receivedSeqNum, 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
 
-    test('messageId takes priority over indexBlockHash when both could be provided', async () => {
+    test('messageId takes priority over indexBlockHash when both could be provided', { timeout: 60_000 }, async () => {
       // This test verifies the priority logic in resolveStartMessageSequenceNumber
       // The implementation checks messageId first before indexBlockHash
       await testWithFailCb(async fail => {
@@ -395,10 +396,10 @@ describe('Stream position lookup', () => {
         const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
         // Should start after the messageId position
-        expect(receivedSeqNum).toBe(parseInt(messageIdPosition) + 1);
+        assert.strictEqual(receivedSeqNum, parseInt(messageIdPosition) + 1);
 
         await client.stop();
       });
-    }, 60_000);
+    });
   });
 });

@@ -1,11 +1,11 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
-import * as Docker from 'dockerode';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
+import Docker from 'dockerode';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import {
   closeTestClients,
@@ -14,8 +14,9 @@ import {
   sendTestEvent,
   testWithFailCb,
   withTimeout,
-} from '../utils';
-import { Message } from '../../client/src/messages';
+} from '../utils.js';
+import { Message } from '../../client/src/messages/index.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Redis interrupt tests', () => {
   let db: PgStore;
@@ -23,7 +24,7 @@ describe('Redis interrupt tests', () => {
   let eventServer: EventObserverServer;
   let redisDockerContainer: Docker.Container;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({
@@ -41,7 +42,7 @@ describe('Redis interrupt tests', () => {
     redisDockerContainer = new Docker().getContainer(redisContainerId);
   });
 
-  afterAll(async () => {
+  after(async () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
@@ -59,11 +60,11 @@ describe('Redis interrupt tests', () => {
     broker.client.once('ready', () => clientConnected.finish());
     const redisBrokerClientsConnected = waiter();
     broker.events.once('redisClientsConnected', () => redisBrokerClientsConnected.finish());
-    expect(broker.client.isReady).toBe(false);
+    assert.strictEqual(broker.client.isReady, false);
     broker.connect({ waitForReady: false });
-    expect(broker.client.isReady).toBe(false);
+    assert.strictEqual(broker.client.isReady, false);
     await Promise.all([withTimeout(clientConnected), withTimeout(redisBrokerClientsConnected)]);
-    expect(broker.client.isReady).toBe(true);
+    assert.strictEqual(broker.client.isReady, true);
     await broker.close();
   });
 
@@ -72,10 +73,10 @@ describe('Redis interrupt tests', () => {
 
     const testEventBody = { test: 'redis_stopped' };
     const postEventResult = await sendTestEvent(eventServer, testEventBody);
-    expect(postEventResult.status).toBe(200);
+    assert.strictEqual(postEventResult.status, 200);
     const lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(lastDbMsg.content).toEqual(testEventBody);
+    assert.deepStrictEqual(lastDbMsg.content, testEventBody);
 
     await redisDockerContainer.start();
   });
@@ -98,24 +99,24 @@ describe('Redis interrupt tests', () => {
       await sendTestEvent(eventServer, testMsg1);
       let lastMsg = await lastMsgWaiter;
       lastMsgWaiter = waiter();
-      expect(lastMsg).toEqual(testMsg1);
+      assert.deepStrictEqual(lastMsg, testMsg1);
 
       // Client does not receive msg when redis is unavailable
       await redisDockerContainer.stop();
       const testMsg2 = { test: randomUUID() };
       await sendTestEvent(eventServer, testMsg2);
-      expect(client.connectionStatus).toBe('reconnecting');
+      assert.strictEqual(client.connectionStatus, 'reconnecting');
       await timeout(100);
-      expect(lastMsgWaiter.isFinished).toBe(false);
+      assert.strictEqual(lastMsgWaiter.isFinished, false);
 
       // Client receives msg once redis is available again
       await redisDockerContainer.start();
       lastMsg = await lastMsgWaiter;
-      expect(client.connectionStatus).toBe('connected');
-      expect(lastMsg).toEqual(testMsg2);
+      assert.strictEqual(client.connectionStatus, 'connected');
+      assert.deepStrictEqual(lastMsg, testMsg2);
 
       await client.stop();
-      expect(client.connectionStatus).toBe('ended');
+      assert.strictEqual(client.connectionStatus, 'ended');
     });
   });
 
@@ -194,14 +195,13 @@ describe('Redis interrupt tests', () => {
       // Check that the msg we threw on during redis ingestion is what we expect
       lastDbMsg = await db.getLastMessage();
       assert(lastDbMsg);
-      expect(lastDbMsg).toMatchObject({
-        sequence_number: thrownMsgId.msgId,
-        content: throwMsgPayload,
-      });
+      assert.strictEqual(lastDbMsg.sequence_number, thrownMsgId.msgId);
+      assert.deepStrictEqual(lastDbMsg.content, throwMsgPayload);
 
       // We expect the client to not have received the message we threw on (simulating redis ingestion failure)
-      expect(parseInt(client.lastProcessedMessageId.split('-')[0])).toBeLessThan(
-        parseInt(thrownMsgId.msgId.split('-')[0])
+      assert.ok(
+        parseInt(client.lastProcessedMessageId.split('-')[0]) <
+          parseInt(thrownMsgId.msgId.split('-')[0])
       );
 
       // Send the next event which should trigger gap detection in the redis-broker ingestion,
@@ -211,7 +211,7 @@ describe('Redis interrupt tests', () => {
         msgGapDetected = true;
       });
       await sendTestEvent(eventServer, { test: 'post_throw_msg' });
-      expect(msgGapDetected).toBe(true);
+      assert.strictEqual(msgGapDetected, true);
 
       // Ensure client was able to reconnect and receive the missing messages
       lastDbMsg = await db.getLastMessage();
@@ -233,7 +233,7 @@ describe('Redis interrupt tests', () => {
       const { originalClientId } = await firstMsgsReceived;
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
+      assert.strictEqual(clientStreamExists, 0);
 
       // The original client consumer group on the chain tip stream should be pruned
       const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
@@ -251,7 +251,7 @@ describe('Redis interrupt tests', () => {
             }
           }
         );
-      expect(chainTipStreamGroupExists).toBe(false);
+      assert.strictEqual(chainTipStreamGroupExists, false);
 
       await client.stop();
       ENV.reload();
@@ -329,10 +329,8 @@ describe('Redis interrupt tests', () => {
       // Check that the msg we wiped after pg insertion is what we expect
       lastDbMsg = await db.getLastMessage();
       assert(lastDbMsg);
-      expect(lastDbMsg).toMatchObject({
-        sequence_number: wipedMsgId.msgId,
-        content: emptyRedisMsgPayload,
-      });
+      assert.strictEqual(lastDbMsg.sequence_number, wipedMsgId.msgId);
+      assert.deepStrictEqual(lastDbMsg.content, emptyRedisMsgPayload);
 
       // Ensure client was able to reconnect and receive the missing messages
       lastDbMsg = await db.getLastMessage();
@@ -357,7 +355,7 @@ describe('Redis interrupt tests', () => {
       const { originalClientId } = await firstMsgsReceived;
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
+      assert.strictEqual(clientStreamExists, 0);
 
       // The original client consumer group on the chain tip stream should be pruned
       const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
@@ -375,7 +373,7 @@ describe('Redis interrupt tests', () => {
             }
           }
         );
-      expect(chainTipStreamGroupExists).toBe(false);
+      assert.strictEqual(chainTipStreamGroupExists, false);
 
       await client.stop();
       ENV.reload();

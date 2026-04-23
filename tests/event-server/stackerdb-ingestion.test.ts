@@ -1,4 +1,4 @@
-import * as assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { waiter } from '@stacks/api-toolkit';
 import {
   createTestClient,
@@ -7,22 +7,23 @@ import {
   testWithFailCb,
   IntegrationTestEnv,
   withTimeout,
-} from '../utils';
+} from '../utils.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Stackerdb ingestion tests', () => {
   let env: IntegrationTestEnv;
 
-  beforeAll(async () => {
+  before(async () => {
     env = await setupIntegrationTestEnv({
       dumpFile: './tests/dumps/stackerdb-sample-events.tsv.gz',
     });
-  }, 60_000);
+  }, { timeout: 30_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await teardownIntegrationTestEnv(env);
   });
 
-  test('stream messages', async () => {
+  test('stream messages', { timeout: 60_000 }, async () => {
     await testWithFailCb(async fail => {
       const lastDbMsg = await env.db.getLastMessage();
       assert(lastDbMsg);
@@ -38,7 +39,7 @@ describe('Stackerdb ingestion tests', () => {
         async () => Promise.resolve({ messageId: client.lastProcessedMessageId }),
         async (id: string) => {
           const msgId = parseInt(id.split('-')[0]);
-          expect(msgId).toBe(lastReceivedMsgId + 1);
+          assert.strictEqual(msgId, lastReceivedMsgId + 1);
           lastReceivedMsgId = msgId;
           // Check if all msgs that are in pg have been received by the client
           if (msgId === lastDbMsgId) {
@@ -52,5 +53,5 @@ describe('Stackerdb ingestion tests', () => {
 
       await client.stop();
     });
-  }, 60_000);
+  });
 });

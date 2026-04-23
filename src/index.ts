@@ -1,11 +1,11 @@
-import { PgStore } from './pg/pg-store';
-import { ENV } from './env';
-import { isProdEnv } from './helpers';
+import { PgStore } from './pg/pg-store.js';
+import { ENV } from './env.js';
+import { isProdEnv } from './helpers.js';
 import { buildProfilerServer, logger, registerShutdownConfig } from '@stacks/api-toolkit';
-import { EventObserverServer } from './event-observer/event-server';
-import { buildPromServer } from './prom/prom-server';
+import { EventObserverServer } from './event-observer/event-server.js';
+import { buildPromServer } from './prom/prom-server.js';
 import { Registry, collectDefaultMetrics } from 'prom-client';
-import { RedisBroker } from './redis/redis-broker';
+import { RedisBroker } from './redis/redis-broker.js';
 
 async function initApp() {
   logger.info(`Initializing in ${ENV.RUN_MODE} run mode...`);

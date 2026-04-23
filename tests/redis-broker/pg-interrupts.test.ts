@@ -1,19 +1,20 @@
-import * as assert from 'node:assert/strict';
-import { PgStore } from '../../src/pg/pg-store';
-import { EventObserverServer } from '../../src/event-observer/event-server';
+import assert from 'node:assert/strict';
+import { PgStore } from '../../src/pg/pg-store.js';
+import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
-import { RedisBroker } from '../../src/redis/redis-broker';
-import { ENV } from '../../src/env';
-import * as Docker from 'dockerode';
+import { RedisBroker } from '../../src/redis/redis-broker.js';
+import { ENV } from '../../src/env.js';
 import {
   closeTestClients,
   createTestClient,
   redisFlushAllWithPrefix,
   sendTestEvent,
   testWithFailCb,
-} from '../utils';
+} from '../utils.js';
 import { timeout, waiter } from '@stacks/api-toolkit';
-import { Message } from '../../client/src/messages';
+import { Message } from '../../client/src/messages/index.js';
+import { before, after, test, describe } from 'node:test';
+import Docker from 'dockerode';
 
 describe('Postgres interrupts', () => {
   let db: PgStore;
@@ -21,7 +22,7 @@ describe('Postgres interrupts', () => {
   let eventServer: EventObserverServer;
   let postgresDockerContainer: Docker.Container;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({
@@ -39,7 +40,7 @@ describe('Postgres interrupts', () => {
     postgresDockerContainer = new Docker().getContainer(pgContainerId);
   });
 
-  afterAll(async () => {
+  after(async () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
@@ -62,22 +63,22 @@ describe('Postgres interrupts', () => {
     });
     const testEventBody = { test: 'pg_ingestion_error' };
     let postEventResult = await sendTestEvent(eventServer, testEventBody, false);
-    expect(postEventResult.ok).toBe(false);
-    expect(onPgMsgInsertWatier.isFinished).toBe(true);
+    assert.strictEqual(postEventResult.ok, false);
+    assert.strictEqual(onPgMsgInsertWatier.isFinished, true);
 
     // Expect the last ingested msg is _not_ the one we just tried to send
     let lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(lastDbMsg.content).toEqual(lastIngestedMsg);
+    assert.deepStrictEqual(lastDbMsg.content, lastIngestedMsg);
 
     // Retry the failed event insertion (like stacks-core would)
     postEventResult = await sendTestEvent(eventServer, testEventBody, false);
-    expect(postEventResult.ok).toBe(true);
+    assert.strictEqual(postEventResult.ok, true);
 
     // Ensure last ingested msg is the one we just sent
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(lastDbMsg.content).toEqual(testEventBody);
+    assert.deepStrictEqual(lastDbMsg.content, testEventBody);
   });
 
   test('event-observer server returns non-200 when pg is down', async () => {
@@ -89,7 +90,7 @@ describe('Postgres interrupts', () => {
     await postgresDockerContainer.stop();
     const testEventBody = { test: 'pg_stopped' };
     let postEventResult = await sendTestEvent(eventServer, testEventBody, false);
-    expect(postEventResult.ok).toBe(false);
+    assert.strictEqual(postEventResult.ok, false);
 
     // Restart postgres container
     await postgresDockerContainer.start();
@@ -107,16 +108,16 @@ describe('Postgres interrupts', () => {
     // Expect the last ingested msg is _not_ the one we just tried to send
     let lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(lastDbMsg.content).toEqual(lastIngestedMsg);
+    assert.deepStrictEqual(lastDbMsg.content, lastIngestedMsg);
 
     // Retry the failed event insertion (like stacks-core would)
     postEventResult = await sendTestEvent(eventServer, testEventBody, false);
-    expect(postEventResult.ok).toBe(true);
+    assert.strictEqual(postEventResult.ok, true);
 
     // Ensure last ingested msg is the one we just sent
     lastDbMsg = await db.getLastMessage();
     assert.ok(lastDbMsg);
-    expect(lastDbMsg.content).toEqual(testEventBody);
+    assert.deepStrictEqual(lastDbMsg.content, testEventBody);
   });
 
   test('client recovers after pg error during backfilling', async () => {
@@ -198,7 +199,7 @@ describe('Postgres interrupts', () => {
       const { originalClientId } = await firstMsgsReceived;
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
+      assert.strictEqual(clientStreamExists, 0);
 
       // The original client consumer group on the chain tip stream should not exist
       // (either it was never created because the error happened early, or it was cleaned up)
@@ -215,7 +216,7 @@ describe('Postgres interrupts', () => {
             }
           }
         );
-      expect(chainTipStreamGroupExists).toBe(false);
+      assert.strictEqual(chainTipStreamGroupExists, false);
 
       await client.stop();
       ENV.reload();

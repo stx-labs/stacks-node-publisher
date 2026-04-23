@@ -6,8 +6,8 @@
       "request": "launch",
       "name": "Run",
       "runtimeArgs": [
-        "-r",
-        "ts-node/register"
+        "--import",
+        "tsx"
       ],
       "args": [
         "${workspaceFolder}/src/index.ts"
@@ -16,7 +16,6 @@
       "internalConsoleOptions": "openOnSessionStart",
       "env": {
         "NODE_ENV": "development",
-        "TS_NODE_SKIP_IGNORE": "true",
         "NETWORK": "testnet",
         "PGDATABASE": "postgres",
         "PGHOST": "127.0.0.1",
@@ -32,47 +31,59 @@
     {
       "type": "node",
       "request": "launch",
-      "name": "Jest: event-server tests",
-      "program": "${workspaceFolder}/node_modules/jest/bin/jest",
+      "name": "test: event-server",
+      "runtimeExecutable": "node",
       "args": [
-        "--testTimeout=3600000",
-        "--runInBand",
-        "--no-cache",
-        "--selectProjects",
-        "event-server",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-global-setup=./tests/setup.ts",
+        "--test-concurrency=1",
+        "./tests/event-server/**/*.test.ts"
       ],
       "outputCapture": "std",
       "console": "integratedTerminal",
+      "env": {
+        "NODE_ENV": "test"
+      }
     },
     {
       "type": "node",
       "request": "launch",
-      "name": "Jest: redis-broker tests",
-      "program": "${workspaceFolder}/node_modules/jest/bin/jest",
+      "name": "test: redis-broker",
+      "runtimeExecutable": "node",
       "args": [
-        "--testTimeout=3600000",
-        "--runInBand",
-        "--no-cache",
-        "--selectProjects",
-        "redis-broker",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-global-setup=./tests/setup.ts",
+        "--test-concurrency=1",
+        "./tests/redis-broker/**/*.test.ts"
       ],
       "outputCapture": "std",
       "console": "integratedTerminal",
+      "env": {
+        "NODE_ENV": "test"
+      }
     },
     {
       "type": "node",
       "request": "launch",
-      "name": "Jest: client-stream tests",
-      "program": "${workspaceFolder}/node_modules/jest/bin/jest",
+      "name": "test: client-stream",
+      "runtimeExecutable": "node",
       "args": [
-        "--testTimeout=3600000",
-        "--runInBand",
-        "--no-cache",
-        "--selectProjects",
-        "client-stream",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-global-setup=./tests/setup.ts",
+        "--test-concurrency=1",
+        "./tests/client-stream/**/*.test.ts"
       ],
       "outputCapture": "std",
       "console": "integratedTerminal",
+      "env": {
+        "NODE_ENV": "test"
+      }
     },
   ]
 }

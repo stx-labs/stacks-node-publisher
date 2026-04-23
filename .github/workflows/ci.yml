@@ -52,7 +52,7 @@ jobs:
           npm ci --prefix client --audit=false
 
       - name: Run tests
-        run: npm run test -- --coverage --selectProjects ${{ matrix.suite }}
+        run: npx c8 --reporter=lcov npm run test:${{ matrix.suite }}
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

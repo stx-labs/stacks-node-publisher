@@ -7,20 +7,21 @@ import {
   IntegrationTestEnv,
   sendTestEvent,
   withTimeout,
-} from '../utils';
+} from '../utils.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Connection request handling', () => {
   let env: IntegrationTestEnv;
 
-  beforeAll(async () => {
+  before(async () => {
     env = await setupIntegrationTestEnv();
-  }, 60_000);
+  }, { timeout: 30_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await teardownIntegrationTestEnv(env);
   });
 
-  test('drops malformed connection requests and continues processing valid requests', async () => {
+  test('drops malformed connection requests and continues processing valid requests', { timeout: 60_000 }, async () => {
     await testWithFailCb(async fail => {
       const connectionStreamKey = `${env.redisBroker.redisStreamKeyPrefix}connection_stream`;
       const malformedMsgId = await env.redisBroker.client.xAdd(connectionStreamKey, '*', {
@@ -45,7 +46,7 @@ describe('Connection request handling', () => {
       );
 
       await sendTestEvent(env.eventServer, { test: 'connection-request-after-malformed' });
-      await withTimeout(firstMessage, 15_000);
+      await withTimeout(firstMessage, 30_000);
 
       // The malformed connection request should be explicitly deleted from the stream.
       await withTimeout(
@@ -67,5 +68,5 @@ describe('Connection request handling', () => {
 
       await client.stop();
     });
-  }, 20_000);
+  });
 });

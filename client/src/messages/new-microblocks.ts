@@ -1,4 +1,4 @@
-import { NewBlockEvent, NewBlockTransaction } from './new-block';
+import { NewBlockEvent, NewBlockTransaction } from './new-block.js';
 
 export interface NewMicroblocksTransaction extends NewBlockTransaction {
   microblock_sequence: number;

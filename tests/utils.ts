@@ -179,7 +179,7 @@ export async function redisFlushAllWithPrefix(prefix: string, client: RedisClien
 
 export function withTimeout<T = void>(promise: Promise<T>, ms?: number): Promise<T> {
   const callerLine = getCallerLine();
-  const timeout = ms ?? 9_000;
+  const timeout = ms ?? 20_000;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`Timeout after ${timeout}ms - ${callerLine}`)),

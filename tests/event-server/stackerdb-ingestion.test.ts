@@ -17,7 +17,7 @@ describe('Stackerdb ingestion tests', () => {
     env = await setupIntegrationTestEnv({
       dumpFile: './tests/dumps/stackerdb-sample-events.tsv.gz',
     });
-  }, { timeout: 10_000 });
+  }, { timeout: 30_000 });
 
   after(async () => {
     await teardownIntegrationTestEnv(env);

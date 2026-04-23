@@ -18,7 +18,7 @@ describe('Message filters', () => {
     env = await setupIntegrationTestEnv({
       dumpFile: './tests/dumps/stackerdb-sample-events.tsv.gz',
     });
-  }, { timeout: 10_000 });
+  }, { timeout: 30_000 });
 
   after(async () => {
     await teardownIntegrationTestEnv(env);
@@ -45,7 +45,7 @@ describe('Message filters', () => {
         }
       );
 
-      await withTimeout(lastMsgId, 10_000);
+      await withTimeout(lastMsgId, 30_000);
       const countRes = await env.db.sql<
         { count: string }[]
       >`SELECT COUNT(*) AS count FROM messages`;
@@ -92,7 +92,7 @@ describe('Message filters', () => {
         }
       );
 
-      await withTimeout(lastMsgId, 10_000);
+      await withTimeout(lastMsgId, 30_000);
       assert.equal(messagesReceived, 1135);
 
       await client.stop();

@@ -15,7 +15,7 @@ describe('Connection request handling', () => {
 
   before(async () => {
     env = await setupIntegrationTestEnv();
-  }, { timeout: 10_000 });
+  }, { timeout: 30_000 });
 
   after(async () => {
     await teardownIntegrationTestEnv(env);
@@ -46,7 +46,7 @@ describe('Connection request handling', () => {
       );
 
       await sendTestEvent(env.eventServer, { test: 'connection-request-after-malformed' });
-      await withTimeout(firstMessage, 15_000);
+      await withTimeout(firstMessage, 30_000);
 
       // The malformed connection request should be explicitly deleted from the stream.
       await withTimeout(

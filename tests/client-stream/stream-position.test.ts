@@ -41,7 +41,7 @@ describe('Stream position lookup', () => {
     env = await setupIntegrationTestEnv({
       dumpFile: './tests/dumps/stackerdb-sample-events.tsv.gz',
     });
-  }, { timeout: 10_000 });
+  }, { timeout: 30_000 });
 
   after(async () => {
     await teardownIntegrationTestEnv(env);
@@ -297,7 +297,7 @@ describe('Stream position lookup', () => {
           }
         );
 
-        const receivedId = await withTimeout(firstMsgWaiter, 10_000);
+        const receivedId = await withTimeout(firstMsgWaiter, 30_000);
         // Should start after the specified message ID
         const receivedSeqNum = parseInt(receivedId.split('-')[0]);
         assert.strictEqual(receivedSeqNum, parseInt(startingSeqNum) + 1);

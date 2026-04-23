@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { PgStore } from '../../src/pg/pg-store.js';
 import { EventObserverServer } from '../../src/event-observer/event-server.js';
 import { Registry } from 'prom-client';
@@ -6,6 +7,7 @@ import { ENV } from '../../src/env.js';
 import {
   closeTestClients,
   createTestClient,
+  migrateDown,
   redisFlushAllWithPrefix,
   sendTestEvent,
   testWithFailCb,
@@ -13,13 +15,14 @@ import {
 } from '../utils.js';
 import { waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages/index.js';
+import { before, after, test, describe, afterEach } from 'node:test';
 
 describe('Multiple clients tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({
@@ -34,9 +37,10 @@ describe('Multiple clients tests', () => {
     await eventServer.start({ port: 0, host: '127.0.0.1' });
   });
 
-  afterAll(async () => {
+  after(async () => {
     await closeTestClients();
     await eventServer.close();
+    await migrateDown();
     await db.close();
     await redisFlushAllWithPrefix(redisBroker.redisStreamKeyPrefix, redisBroker.client);
     await redisBroker.close();
@@ -134,8 +138,8 @@ describe('Multiple clients tests', () => {
       ]);
 
       // Clients should have the original connection ID from when backfilling and until caught up after live-streaming
-      expect(client1.clientId).toBe(client1OrigId.clientId);
-      expect(client2.clientId).toBe(client2OrigId.clientId);
+      assert.strictEqual(client1.clientId, client1OrigId.clientId);
+      assert.strictEqual(client2.clientId, client2OrigId.clientId);
 
       await client1.stop();
       await client2.stop();
@@ -237,8 +241,8 @@ describe('Multiple clients tests', () => {
       ]);
 
       // Clients should have the original connection ID from when backfilling and until caught up after live-streaming
-      expect(client1.clientId).toBe(client1OrigId.clientId);
-      expect(client2.clientId).toBe(client2OrigId.clientId);
+      assert.strictEqual(client1.clientId, client1OrigId.clientId);
+      assert.strictEqual(client2.clientId, client2OrigId.clientId);
 
       await client1.stop();
       await client2.stop();

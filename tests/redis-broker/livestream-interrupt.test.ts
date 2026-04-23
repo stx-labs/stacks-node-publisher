@@ -15,13 +15,14 @@ import {
 import assert from 'node:assert';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages/index.js';
+import { before, after, test, describe, afterEach } from 'node:test';
 
 describe('Live-stream interrupt tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({
@@ -36,7 +37,7 @@ describe('Live-stream interrupt tests', () => {
     await eventServer.start({ port: 0, host: '127.0.0.1' });
   });
 
-  afterAll(async () => {
+  after(async () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
@@ -97,9 +98,9 @@ describe('Live-stream interrupt tests', () => {
       const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
       const clientStreamInfo = await redisBroker.client.xInfoStream(clientStreamKey);
       let clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(1);
-      expect(clientStreamInfo).toBeTruthy();
-      expect(clientStreamInfo.length).toBeGreaterThan(0);
+      assert.strictEqual(clientStreamExists, 1);
+      assert.ok(clientStreamInfo);
+      assert.ok(clientStreamInfo.length > 0);
 
       // The client consumer group on the chain tip stream should still be alive
       const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(client.clientId);
@@ -107,18 +108,18 @@ describe('Live-stream interrupt tests', () => {
         redisBroker.chainTipStreamKey,
         clientGroupKey
       );
-      expect(chainTipStreamGroupInfo).toBeTruthy();
-      expect(chainTipStreamGroupInfo.length).toBeGreaterThan(0);
+      assert.ok(chainTipStreamGroupInfo);
+      assert.ok(chainTipStreamGroupInfo.length > 0);
 
       // The server should demote the client to backfill after the MAX_MSG_LAG threshold is hit
       const clientDemoted = once(redisBroker.events, 'consumerDemotedToBackfill');
       const onDemoteToBackfill = redisBroker._testHooks!.onDemoteToBackfill.register(
         async clientId => {
-          expect(clientId).toBe(client.clientId);
+          assert.strictEqual(clientId, client.clientId);
 
           // The client consumer redis stream should still exist (demotion preserves it)
           clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-          expect(clientStreamExists).toBe(1);
+          assert.strictEqual(clientStreamExists, 1);
 
           // The client consumer group on the chain tip stream should be destroyed (demotion destroys it)
           const chainTipStreamGroupExists = await redisBroker.client
@@ -133,7 +134,7 @@ describe('Live-stream interrupt tests', () => {
                 }
               }
             );
-          expect(chainTipStreamGroupExists).toBe(false);
+          assert.strictEqual(chainTipStreamGroupExists, false);
 
           onDemoteToBackfill.unregister();
           return Promise.resolve();
@@ -200,7 +201,7 @@ describe('Live-stream interrupt tests', () => {
               filter: 'ID',
               id: clientRedisConnectionID,
             });
-            expect(clientKillCount).toBe(1);
+            assert.strictEqual(clientKillCount, 1);
             livestreamHit.finish();
           } catch (error) {
             livestreamHit.reject(error as Error);
@@ -232,7 +233,7 @@ describe('Live-stream interrupt tests', () => {
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
           // Client should have reconnected with a new client ID
-          expect(client.clientId).not.toBe(originalClientId);
+          assert.notStrictEqual(client.clientId, originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
@@ -279,7 +280,7 @@ describe('Live-stream interrupt tests', () => {
             filter: 'ID',
             id: perConsumerClientRedisConnectionID,
           });
-          expect(clientKillCount).toBe(1);
+          assert.strictEqual(clientKillCount, 1);
 
           livestreamingHit.finish();
 
@@ -321,7 +322,7 @@ describe('Live-stream interrupt tests', () => {
         });
       });
       const newConsumerClient = await withTimeout(newConsumerClientCreated);
-      expect(newConsumerClient.clientId).toBe(client.clientId);
+      assert.strictEqual(newConsumerClient.clientId, client.clientId);
 
       const { originalClientId } = await withTimeout(firstMsgsReceived);
 
@@ -330,7 +331,7 @@ describe('Live-stream interrupt tests', () => {
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
           // Client should have reconnected with a new client ID
-          expect(client.clientId).not.toBe(originalClientId);
+          assert.notStrictEqual(client.clientId, originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
@@ -380,7 +381,7 @@ describe('Live-stream interrupt tests', () => {
                 filter: 'ID',
                 id: clientId,
               });
-              expect(clientKillCount).toBe(1);
+              assert.strictEqual(clientKillCount, 1);
             })
           );
 
@@ -443,15 +444,15 @@ describe('Live-stream interrupt tests', () => {
       });
 
       // Original client ID should not have changed
-      expect(originalClientId).toBe(client.clientId);
+      assert.strictEqual(originalClientId, client.clientId);
 
       // The client consumer redis stream should still be alive
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamInfo = await redisBroker.client.xInfoStream(clientStreamKey);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(1);
-      expect(clientStreamInfo).toBeTruthy();
-      expect(clientStreamInfo.length).toBe(0);
+      assert.strictEqual(clientStreamExists, 1);
+      assert.ok(clientStreamInfo);
+      assert.strictEqual(clientStreamInfo.length, 0);
 
       // The client consumer group on the chain tip stream should still be alive
       const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
@@ -459,8 +460,8 @@ describe('Live-stream interrupt tests', () => {
         redisBroker.chainTipStreamKey,
         clientGroupKey
       );
-      expect(chainTipStreamGroupInfo).toBeTruthy();
-      expect(chainTipStreamGroupInfo.length).toBeGreaterThan(0);
+      assert.ok(chainTipStreamGroupInfo);
+      assert.ok(chainTipStreamGroupInfo.length > 0);
 
       await client.stop();
       ENV.reload();
@@ -531,7 +532,7 @@ describe('Live-stream interrupt tests', () => {
       await Promise.all([onBackfillHit, onRedisConsumerGroupDestroyed, onPerConsumerClientCreated]);
 
       const [newConsumerClient] = (await onPerConsumerClientCreated) as [{ clientId: string }];
-      expect(newConsumerClient.clientId).toBe(client.clientId);
+      assert.strictEqual(newConsumerClient.clientId, client.clientId);
 
       const { originalClientId } = onFirstMsgsReceived;
 
@@ -541,7 +542,7 @@ describe('Live-stream interrupt tests', () => {
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
           // Client should have reconnected with a new client ID
-          expect(client.clientId).not.toBe(originalClientId);
+          assert.notStrictEqual(client.clientId, originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }

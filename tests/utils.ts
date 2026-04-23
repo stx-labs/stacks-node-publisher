@@ -5,9 +5,10 @@ import { Registry } from 'prom-client';
 import { StacksMessageStream, SelectedMessagePaths } from '../client/src/index.js';
 import { ENV } from '../src/env.js';
 import { EventObserverServer } from '../src/event-observer/event-server.js';
-import { PgStore } from '../src/pg/pg-store.js';
+import { MIGRATIONS_DIR, PgStore } from '../src/pg/pg-store.js';
 import { RedisBroker } from '../src/redis/redis-broker.js';
 import { RedisClient } from '../src/redis/redis-types.js';
+import { runMigrations } from '@stacks/api-toolkit';
 
 export type IntegrationTestEnv = {
   db: PgStore;
@@ -56,6 +57,7 @@ export async function setupIntegrationTestEnv(options?: {
 export async function teardownIntegrationTestEnv(env: IntegrationTestEnv): Promise<void> {
   await closeTestClients();
   await env.eventServer.close();
+  await migrateDown();
   await env.db.close();
   await redisFlushAllWithPrefix(env.redisBroker.redisStreamKeyPrefix, env.redisBroker.client);
   await env.redisBroker.close();
@@ -75,12 +77,6 @@ export async function loadEventsDump(
     crlfDelay: Infinity,
   });
   // Suppress noisy logs during bulk insertion
-  const spyInfoLogs = [
-    jest.spyOn(eventServer.logger, 'info').mockImplementation(() => {}),
-    jest.spyOn(eventServer.logger, 'debug').mockImplementation(() => {}),
-    jest.spyOn(redisBroker.logger, 'info').mockImplementation(() => {}),
-    jest.spyOn(redisBroker.logger, 'debug').mockImplementation(() => {}),
-  ];
   let skipping = !!range?.startAtMsgId;
   for await (const line of rl) {
     const [id, timestamp, path, payload] = line.split('\t');
@@ -105,7 +101,6 @@ export async function loadEventsDump(
     }
   }
   rl.close();
-  spyInfoLogs.forEach(spy => spy.mockRestore());
 }
 
 export async function sendTestEvent(
@@ -184,7 +179,7 @@ export async function redisFlushAllWithPrefix(prefix: string, client: RedisClien
 
 export function withTimeout<T = void>(promise: Promise<T>, ms?: number): Promise<T> {
   const callerLine = getCallerLine();
-  const timeout = ms ?? Math.floor(0.9 * parseInt(process.env.JEST_TEST_TIMEOUT as string));
+  const timeout = ms ?? 9_000;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`Timeout after ${timeout}ms - ${callerLine}`)),
@@ -219,4 +214,15 @@ export function testWithFailCb(fn: (onError: (error: any) => void) => Promise<vo
   return new Promise<void>((resolve, reject) => {
     fn(error => reject(error as Error)).then(resolve, reject);
   });
+}
+
+export function migrateDown() {
+  return runMigrations(MIGRATIONS_DIR, 'down', {
+    host: ENV.PGHOST,
+    port: ENV.PGPORT,
+    user: ENV.PGUSER,
+    password: ENV.PGPASSWORD,
+    database: ENV.PGDATABASE,
+    schema: ENV.PGSCHEMA,
+  })
 }

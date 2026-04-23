@@ -9,21 +9,22 @@ import {
   withTimeout,
 } from '../utils.js';
 import { Message, MessagePath } from '../../client/src/messages/index.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Message filters', () => {
   let env: IntegrationTestEnv;
 
-  beforeAll(async () => {
+  before(async () => {
     env = await setupIntegrationTestEnv({
       dumpFile: './tests/dumps/stackerdb-sample-events.tsv.gz',
     });
-  }, 60_000);
+  }, { timeout: 10_000 });
 
-  afterAll(async () => {
+  after(async () => {
     await teardownIntegrationTestEnv(env);
   });
 
-  test('no filter sends all messages', async () => {
+  test('no filter sends all messages', { timeout: 60_000 }, async () => {
     await testWithFailCb(async fail => {
       const lastDbMsg = await env.db.getLastMessage();
       assert(lastDbMsg);
@@ -52,9 +53,9 @@ describe('Message filters', () => {
 
       await client.stop();
     });
-  }, 10_000);
+  });
 
-  test('filter excludes signer messages', async () => {
+  test('filter excludes signer messages', { timeout: 60_000 }, async () => {
     await testWithFailCb(async fail => {
       const client = await createTestClient(
         null,
@@ -96,5 +97,5 @@ describe('Message filters', () => {
 
       await client.stop();
     });
-  }, 10_000);
+  });
 });

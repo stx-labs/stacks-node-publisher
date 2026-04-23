@@ -15,13 +15,14 @@ import {
 import assert from 'node:assert';
 import { timeout, waiter } from '@stacks/api-toolkit';
 import { Message } from '../../client/src/messages/index.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Backfill interrupt tests', () => {
   let db: PgStore;
   let redisBroker: RedisBroker;
   let eventServer: EventObserverServer;
 
-  beforeAll(async () => {
+  before(async () => {
     db = await PgStore.connect();
 
     redisBroker = new RedisBroker({
@@ -36,7 +37,7 @@ describe('Backfill interrupt tests', () => {
     await eventServer.start({ port: 0, host: '127.0.0.1' });
   });
 
-  afterAll(async () => {
+  after(async () => {
     await closeTestClients();
     await eventServer.close();
     await db.close();
@@ -88,9 +89,9 @@ describe('Backfill interrupt tests', () => {
       const clientStreamKey = redisBroker.getClientStreamKey(client.clientId);
       const clientStreamInfo = await redisBroker.client.xInfoStream(clientStreamKey);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(1);
-      expect(clientStreamInfo).toBeTruthy();
-      expect(clientStreamInfo.length).toBeGreaterThan(0);
+      assert.equal(clientStreamExists, 1);
+      assert.ok(clientStreamInfo);
+      assert.ok(clientStreamInfo.length > 0);
 
       // Queue up over MAX_MSG_LAG messages - this should NOT affect the backfilling client
       for (let i = 0; i < ENV.MAX_MSG_LAG * 3; i++) {
@@ -102,7 +103,7 @@ describe('Backfill interrupt tests', () => {
 
       // The client stream should still exist (not pruned during backfill)
       const clientStreamStillExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamStillExists).toBe(1);
+      assert.equal(clientStreamStillExists, 1);
 
       // Remove the client msg ingestion sleep to allow it to catch up
       slowIngestion = false;
@@ -146,7 +147,7 @@ describe('Backfill interrupt tests', () => {
             filter: 'ID',
             id: clientRedisConnectionID,
           });
-          expect(clientKillCount).toBe(1);
+          assert.equal(clientKillCount, 1);
           backfillHit.finish();
         } catch (error) {
           backfillHit.reject(error as Error);
@@ -177,7 +178,7 @@ describe('Backfill interrupt tests', () => {
       await new Promise<void>(resolve => {
         client.events.on('msgReceived', ({ id }) => {
           // Client should have reconnected with a new client ID
-          expect(client.clientId).not.toBe(originalClientId);
+          assert.notEqual(client.clientId, originalClientId);
           if (id.split('-')[0] === lastDbMsg?.sequence_number.split('-')[0]) {
             resolve();
           }
@@ -212,7 +213,7 @@ describe('Backfill interrupt tests', () => {
           filter: 'ID',
           id: perConsumerClientRedisConnectionID,
         });
-        expect(clientKillCount).toBe(1);
+        assert.equal(clientKillCount, 1);
 
         backfillHit.finish();
 
@@ -242,7 +243,7 @@ describe('Backfill interrupt tests', () => {
       const [newConsumerClient] = (await once(redisBroker.events, 'perConsumerClientCreated')) as [
         { clientId: string },
       ];
-      expect(newConsumerClient.clientId).toBe(client.clientId);
+      assert.equal(newConsumerClient.clientId, client.clientId);
 
       // Client should reconnect and continue processing messages
       lastDbMsg = await db.getLastMessage();
@@ -290,7 +291,7 @@ describe('Backfill interrupt tests', () => {
               filter: 'ID',
               id: clientId,
             });
-            expect(clientKillCount).toBe(1);
+            assert.equal(clientKillCount, 1);
           })
         );
 
@@ -352,15 +353,15 @@ describe('Backfill interrupt tests', () => {
       });
 
       // Original client ID should not have changed
-      expect(originalClientId).toBe(client.clientId);
+      assert.equal(originalClientId, client.clientId);
 
       // The client consumer redis stream should still be alive
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamInfo = await redisBroker.client.xInfoStream(clientStreamKey);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(1);
-      expect(clientStreamInfo).toBeTruthy();
-      expect(clientStreamInfo.length).toBe(0);
+      assert.equal(clientStreamExists, 1);
+      assert.ok(clientStreamInfo);
+      assert.equal(clientStreamInfo.length, 0);
 
       // The client consumer group on the chain tip stream should still be alive
       const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
@@ -368,8 +369,8 @@ describe('Backfill interrupt tests', () => {
         redisBroker.chainTipStreamKey,
         clientGroupKey
       );
-      expect(chainTipStreamGroupInfo).toBeTruthy();
-      expect(chainTipStreamGroupInfo.length).toBeGreaterThan(0);
+      assert.ok(chainTipStreamGroupInfo);
+      assert.ok(chainTipStreamGroupInfo.length > 0);
 
       await client.stop();
       ENV.reload();
@@ -428,7 +429,7 @@ describe('Backfill interrupt tests', () => {
       await Promise.all([onBackfillHit, onRedisConsumerGroupDestroyed, onPerConsumerClientCreated]);
 
       const [newConsumerClient] = (await onPerConsumerClientCreated) as [{ clientId: string }];
-      expect(newConsumerClient.clientId).toBe(client.clientId);
+      assert.equal(newConsumerClient.clientId, client.clientId);
 
       const { originalClientId } = onFirstMsgsReceived;
 
@@ -453,7 +454,7 @@ describe('Backfill interrupt tests', () => {
       // The original client consumer redis stream should be pruned
       const clientStreamKey = redisBroker.getClientStreamKey(originalClientId);
       const clientStreamExists = await redisBroker.client.exists(clientStreamKey);
-      expect(clientStreamExists).toBe(0);
+      assert.equal(clientStreamExists, 0);
 
       // The original client consumer group on the chain tip stream should be pruned
       const clientGroupKey = redisBroker.getClientChainTipStreamGroupKey(originalClientId);
@@ -471,7 +472,7 @@ describe('Backfill interrupt tests', () => {
             }
           }
         );
-      expect(chainTipStreamGroupExists).toBe(false);
+      assert.equal(chainTipStreamGroupExists, false);
 
       await client.stop();
       ENV.reload();
@@ -529,7 +530,7 @@ describe('Backfill interrupt tests', () => {
 
       // ClientID should be the same as from when first msg received (no resets)
       const { originalClientId } = onFirstMsgsReceived;
-      expect(client.clientId).toEqual(originalClientId);
+      assert.equal(client.clientId, originalClientId);
 
       // Send over new messages to verify client is still receiving them
       for (let i = 0; i < ENV.MAX_MSG_LAG * 2; i++) {

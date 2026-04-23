@@ -5,6 +5,7 @@ import {
   IntegrationTestEnv,
   loadEventsDump,
 } from '../utils.js';
+import { before, after, test, describe } from 'node:test';
 
 describe('Node synchronization', () => {
   let env: IntegrationTestEnv;
@@ -34,11 +35,11 @@ describe('Node synchronization', () => {
     indexBlockHash: '0x1769ac7ebbff5a6995528cf9c72eed235337a2aa382cddfc0e1e3b85f08b97c6',
   };
 
-  beforeAll(async () => {
+  before(async () => {
     env = await setupIntegrationTestEnv();
-  }, 60_000);
+  });
 
-  afterAll(async () => {
+  after(async () => {
     await teardownIntegrationTestEnv(env);
   });
 
@@ -48,34 +49,34 @@ describe('Node synchronization', () => {
     });
     const lastBlock = await env.db.getLastIngestedBlockIdentifier();
     assert(lastBlock);
-    expect(lastBlock.index_block_hash).toBe(BLOCK_100.indexBlockHash);
-    expect(lastBlock.block_height).toBe(BLOCK_100.blockHeight);
+    assert.strictEqual(lastBlock.index_block_hash, BLOCK_100.indexBlockHash);
+    assert.strictEqual(lastBlock.block_height, BLOCK_100.blockHeight);
   });
 
   test('rejects block with missing parent', async () => {
-    await expect(
+    await assert.rejects(
       loadEventsDump(env.eventServer, env.redisBroker, DUMP_FILE, {
         // Would start at block 495, which has a missing parent
         startAtMsgId: BLOCK_495.sequenceNumber,
       })
-    ).rejects.toThrow();
+    );
     const lastBlock = await env.db.getLastIngestedBlockIdentifier();
     assert(lastBlock);
     // Should still be on the last block we ingested
-    expect(lastBlock.index_block_hash).toBe(BLOCK_100.indexBlockHash);
-    expect(lastBlock.block_height).toBe(BLOCK_100.blockHeight);
+    assert.strictEqual(lastBlock.index_block_hash, BLOCK_100.indexBlockHash);
+    assert.strictEqual(lastBlock.block_height, BLOCK_100.blockHeight);
   });
 
   test('ignore off-order genesis block', async () => {
-    await expect(
+    await assert.doesNotReject(
       loadEventsDump(env.eventServer, env.redisBroker, DUMP_FILE, {
         startAtMsgId: '1',
         stopAtMsgId: '1',
       })
-    ).resolves.not.toThrow();
+    );
     const lastBlock = await env.db.getLastIngestedBlockIdentifier();
     assert(lastBlock);
-    expect(lastBlock.index_block_hash).toBe(BLOCK_100.indexBlockHash);
+    assert.strictEqual(lastBlock.index_block_hash, BLOCK_100.indexBlockHash);
   });
 
   test('ignores previously ingested blocks', async () => {
@@ -84,22 +85,22 @@ describe('Node synchronization', () => {
     const lastSequenceNumber = lastMessage.sequence_number;
 
     // Try from block 50 to block 100, should not ingest any messages
-    await expect(
+    await assert.doesNotReject(
       loadEventsDump(env.eventServer, env.redisBroker, DUMP_FILE, {
         startAtMsgId: BLOCK_50.sequenceNumber,
         stopAtMsgId: BLOCK_100.sequenceNumber,
       })
-    ).resolves.not.toThrow();
+    );
 
     // Should still be on the last block we ingested
     const lastBlock = await env.db.getLastIngestedBlockIdentifier();
     assert(lastBlock);
-    expect(lastBlock.index_block_hash).toBe(BLOCK_100.indexBlockHash);
-    expect(lastBlock.block_height).toBe(BLOCK_100.blockHeight);
+    assert.strictEqual(lastBlock.index_block_hash, BLOCK_100.indexBlockHash);
+    assert.strictEqual(lastBlock.block_height, BLOCK_100.blockHeight);
     // Last message ID is the same
     const newLastMessage = await env.db.getLastMessage();
     assert(newLastMessage);
-    expect(newLastMessage.sequence_number).toBe(lastSequenceNumber);
+    assert.strictEqual(newLastMessage.sequence_number, lastSequenceNumber);
   });
 
   test('continues ingesting after new block is received', async () => {
@@ -108,7 +109,7 @@ describe('Node synchronization', () => {
     });
     const lastBlock = await env.db.getLastIngestedBlockIdentifier();
     assert(lastBlock);
-    expect(lastBlock.index_block_hash).toBe(BLOCK_505.indexBlockHash);
-    expect(lastBlock.block_height).toBe(BLOCK_505.blockHeight);
+    assert.strictEqual(lastBlock.index_block_hash, BLOCK_505.indexBlockHash);
+    assert.strictEqual(lastBlock.block_height, BLOCK_505.blockHeight);
   });
 });

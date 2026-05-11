@@ -3,7 +3,7 @@ import { logger as defaultLogger, timeout, waiter, Waiter } from '@stacks/api-to
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Message, MessagePath } from './messages/index.js';
-import { MessageIngestionError, NoMessageTimeoutError } from './errors.js';
+import { MessageIngestionError, NoMessageTimeoutError, RedisReadTimeoutError } from './errors.js';
 
 export * from './messages/index.js';
 
@@ -65,6 +65,21 @@ export type StreamOptions = {
    */
   batchSize?: number;
   /**
+   * How long Redis should block while waiting for new stream messages. Defaults to 1_000ms.
+   */
+  readBlockMs?: number;
+  /**
+   * Maximum time to wait for an XREADGROUP command to resolve before recreating the Redis
+   * connection. This protects against half-open TCP sockets where the command promise never
+   * settles. Defaults to 10_000ms. Set to 0 to disable.
+   */
+  readCommandTimeoutMs?: number;
+  /**
+   * Initial delay, in milliseconds, before Redis socket TCP keepalive probes begin. Defaults to
+   * 30_000ms.
+   */
+  redisSocketKeepAliveInitialDelayMs?: number;
+  /**
    * Maximum time in milliseconds to wait without receiving any messages before reconnecting. This
    * prevents the client from spinning forever on an orphaned stream if the server restarts and
    * fails to clean up the client's consumer group. Defaults to 120_000 (2 minutes). Set to 0 to
@@ -86,18 +101,22 @@ export class StacksMessageStream {
   static readonly GROUP_NAME = 'primary_group';
   static readonly CONSUMER_NAME = 'primary_consumer';
 
-  readonly client: RedisClientType;
+  client: RedisClientType;
   public clientId = randomUUID();
 
   private readonly selectedPaths: SelectedMessagePaths;
   private readonly redisStreamPrefix: string;
   private readonly appName: string;
+  private readonly redisUrl: string | undefined;
 
   private readonly abort: AbortController;
   private readonly streamWaiter: Waiter;
 
   private readonly logger = defaultLogger.child({ module: 'StacksMessageStream' });
   private readonly msgBatchSize: number;
+  private readonly xReadBlockMs: number;
+  private readonly xReadCommandTimeoutMs: number;
+  private readonly redisSocketKeepAliveInitialDelayMs: number;
   private readonly noMessageTimeoutMs: number;
 
   /** For testing purposes only. The last message ID that was processed by this client. */
@@ -109,6 +128,7 @@ export class StacksMessageStream {
     redisConsumerGroupDestroyed: [];
     connectionAnnounced: [{ clientId: string }];
     noMessageTimeoutReconnect: [{ clientId: string }];
+    redisReadTimeoutReconnect: [{ clientId: string; timeoutMs: number }];
     msgReceived: [{ id: string }];
   }>();
 
@@ -125,32 +145,16 @@ export class StacksMessageStream {
     if (this.redisStreamPrefix !== '' && !this.redisStreamPrefix.endsWith(':')) {
       this.redisStreamPrefix += ':';
     }
+    this.redisUrl = args.redisUrl;
     this.appName = this.sanitizeRedisClientName(args.appName);
     this.msgBatchSize = args.options?.batchSize ?? 100;
+    this.xReadBlockMs = args.options?.readBlockMs ?? 1_000;
+    this.xReadCommandTimeoutMs = args.options?.readCommandTimeoutMs ?? 10_000;
+    this.redisSocketKeepAliveInitialDelayMs =
+      args.options?.redisSocketKeepAliveInitialDelayMs ?? 30_000;
     this.noMessageTimeoutMs = args.options?.noMessageTimeoutMs ?? 120_000;
 
-    this.client = createClient({
-      url: args.redisUrl,
-      name: this.redisClientName,
-      disableOfflineQueue: true,
-    });
-
-    // Must have a listener for 'error' events to avoid unhandled exceptions
-    this.client.on('error', (err: Error) =>
-      this.logger.error(err, `Redis error for client ${this.clientId}`)
-    );
-    this.client.on('reconnecting', () => {
-      this.connectionStatus = 'reconnecting';
-      this.logger.info(`Reconnecting to Redis for client ${this.clientId}`);
-    });
-    this.client.on('ready', () => {
-      this.connectionStatus = 'connected';
-      this.logger.info(`Redis connection ready for client ${this.clientId}`);
-    });
-    this.client.on('end', () => {
-      this.connectionStatus = 'ended';
-      this.logger.info(`Redis connection ended for client ${this.clientId}`);
-    });
+    this.client = this.createRedisClient();
   }
 
   // Sanitize the redis client name to only include valid characters (same approach used in the
@@ -162,6 +166,42 @@ export class StacksMessageStream {
 
   get redisClientName() {
     return `${this.redisStreamPrefix}snp-consumer:${this.appName}:${this.clientId}`;
+  }
+
+  private createRedisClient(): RedisClientType {
+    const client = createClient({
+      url: this.redisUrl,
+      name: this.redisClientName,
+      disableOfflineQueue: true,
+      socket: {
+        keepAlive: true,
+        keepAliveInitialDelay: this.redisSocketKeepAliveInitialDelayMs,
+      },
+    });
+
+    // Must have a listener for 'error' events to avoid unhandled exceptions.
+    client.on('error', (err: Error) =>
+      this.logger.error(err, `Redis error for client ${this.clientId}`)
+    );
+    client.on('reconnecting', () => {
+      this.connectionStatus = 'reconnecting';
+      this.logger.info(`Reconnecting to Redis for client ${this.clientId}`);
+    });
+    client.on('ready', () => {
+      this.connectionStatus = 'connected';
+      this.logger.info(`Redis connection ready for client ${this.clientId}`);
+    });
+    client.on('end', () => {
+      this.connectionStatus = 'ended';
+      this.logger.info(`Redis connection ended for client ${this.clientId}`);
+    });
+    return client as RedisClientType;
+  }
+
+  private async recreateRedisClient() {
+    this.client.destroy();
+    this.client = this.createRedisClient();
+    await this.connect({ waitForReady: true });
   }
 
   async connect({ waitForReady }: { waitForReady: boolean }) {
@@ -212,6 +252,8 @@ export class StacksMessageStream {
             break;
           } else if (error instanceof NoMessageTimeoutError) {
             this.logger.info(error.message);
+          } else if (error instanceof RedisReadTimeoutError) {
+            this.logger.error(error, `Redis read timed out for client ${this.clientId}`);
           } else if (error instanceof MessageIngestionError) {
             this.logger.error(error.cause as Error, error.message);
           } else if ((error as Error).message?.includes('NOGROUP')) {
@@ -290,18 +332,7 @@ export class StacksMessageStream {
     while (!this.abort.signal.aborted) {
       // The backend creates the group with the correct starting position, so we use '>' here to
       // get only messages after the last message ID.
-      const results = await this.client.xReadGroup(
-        StacksMessageStream.GROUP_NAME,
-        StacksMessageStream.CONSUMER_NAME,
-        {
-          key: streamKey,
-          id: '>',
-        },
-        {
-          COUNT: this.msgBatchSize,
-          BLOCK: 1000, // Wait 1 second for new events.
-        }
-      );
+      const results = await this.xReadGroupWithTimeout(streamKey);
       if (!results) {
         // Check if we've been starved of messages for too long. This can happen if the server
         // restarts and fails to clean up this client's stream/group, leaving us polling an
@@ -342,6 +373,58 @@ export class StacksMessageStream {
             .xDel(streamKey, item.id)
             .exec();
         }
+      }
+    }
+  }
+
+  /**
+   * Read messages from the stream with a timeout. If the timeout is reached, the client will
+   * reconnect to the Redis server.
+   * @param streamKey - The key of the stream to read from.
+   * @returns The messages read from the stream.
+   * @throws {RedisReadTimeoutError} If the timeout is reached.
+   */
+  private async xReadGroupWithTimeout(streamKey: string) {
+    const xReadGroup = this.client.xReadGroup(
+      StacksMessageStream.GROUP_NAME,
+      StacksMessageStream.CONSUMER_NAME,
+      {
+        key: streamKey,
+        id: '>',
+      },
+      {
+        COUNT: this.msgBatchSize,
+        BLOCK: this.xReadBlockMs,
+      }
+    );
+    if (this.xReadCommandTimeoutMs === 0) {
+      return await xReadGroup;
+    }
+
+    let timeoutId: NodeJS.Timeout | null = null;
+    const commandTimeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new RedisReadTimeoutError(this.xReadCommandTimeoutMs)),
+        this.xReadCommandTimeoutMs
+      );
+    });
+    try {
+      return await Promise.race([xReadGroup, commandTimeout]);
+    } catch (error: unknown) {
+      if (error instanceof RedisReadTimeoutError) {
+        this.events.emit('redisReadTimeoutReconnect', {
+          clientId: this.clientId,
+          timeoutMs: this.xReadCommandTimeoutMs,
+        });
+        // Recreate the Redis client to reset the connection and try again. This is not a simple
+        // reconnect, this is a full new stream connection.
+        await this.recreateRedisClient();
+      }
+      // Re-throw the error to be handled by the caller.
+      throw error;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
     }
   }

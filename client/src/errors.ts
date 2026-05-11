@@ -12,6 +12,16 @@ export class NoMessageTimeoutError extends Error {
 }
 
 /**
+ * Error thrown when a Redis XREADGROUP command does not resolve within the expected timeout.
+ */
+export class RedisReadTimeoutError extends Error {
+  constructor(public readonly timeoutMs: number) {
+    super(`Redis XREADGROUP command timed out after ${timeoutMs}ms`);
+    this.name = 'RedisReadTimeoutError';
+  }
+}
+
+/**
  * Error thrown when an error occurs while ingesting a message.
  */
 export class MessageIngestionError extends Error {

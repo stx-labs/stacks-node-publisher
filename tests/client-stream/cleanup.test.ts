@@ -139,7 +139,10 @@ describe('Cleanup tests', () => {
 
       // Verify the consumer group was destroyed on the chain tip stream
       const groups = await redisBroker.client.xInfoGroups(redisBroker.chainTipStreamKey);
-      assert.strictEqual(groups.some(g => g.name === groupKey), false);
+      assert.strictEqual(
+        groups.some(g => g.name === groupKey),
+        false
+      );
 
       // Verify client stream was deleted
       const exists = await redisBroker.client.exists(clientStreamKey);
@@ -235,6 +238,46 @@ describe('Cleanup tests', () => {
       // The client should reconnect with a new clientId.
       const newConnectionAnnounced = once(client.events, 'connectionAnnounced');
       const [{ clientId: newClientId }] = await withTimeout(newConnectionAnnounced);
+      assert.notStrictEqual(newClientId, firstClientId);
+
+      await client.stop();
+    });
+
+    test('client reconnects after Redis read command timeout', async () => {
+      const readTimeoutMs = 200;
+      const client = new StacksMessageStream({
+        appName: 'snp-client-test-read-timeout',
+        redisUrl: ENV.REDIS_URL,
+        redisStreamPrefix: 'test-read-timeout:',
+        options: {
+          readCommandTimeoutMs: readTimeoutMs,
+        },
+      });
+      await client.connect({ waitForReady: true });
+
+      Object.defineProperty(client.client, 'xReadGroup', {
+        value: () => new Promise(() => undefined),
+      });
+
+      client.start(
+        async () => Promise.resolve(null),
+        async () => Promise.resolve()
+      );
+
+      const [{ clientId: firstClientId }] = await withTimeout(
+        once(client.events, 'connectionAnnounced')
+      );
+
+      const [{ clientId: readTimeoutClientId, timeoutMs }] = await withTimeout(
+        once(client.events, 'redisReadTimeoutReconnect'),
+        5_000
+      );
+      assert.strictEqual(readTimeoutClientId, firstClientId);
+      assert.strictEqual(timeoutMs, readTimeoutMs);
+
+      const [{ clientId: newClientId }] = await withTimeout(
+        once(client.events, 'connectionAnnounced')
+      );
       assert.notStrictEqual(newClientId, firstClientId);
 
       await client.stop();

@@ -3,10 +3,18 @@
   "version": "2.1.2",
   "description": "A client to consume Stacks events from the Stacks Node Publisher service",
   "type": "module",
-  "main": "./dist/index.js",
-  "typings": "./dist/index.d.ts",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "typings": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
   "scripts": {
-    "build": "rimraf ./dist && tsc --project tsconfig.build.json",
+    "build": "rimraf ./dist && tsc --project tsconfig.build.esm.json && tsc --project tsconfig.build.cjs.json && node -e \"require('node:fs').writeFileSync('dist/cjs/package.json', JSON.stringify({ type: 'commonjs' }, null, 2) + '\\n')\"",
     "prepublishOnly": "npm run build"
   },
   "files": [

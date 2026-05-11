@@ -1,9 +1,12 @@
 import { createClient, RedisClientType } from 'redis';
-import { logger as defaultLogger, timeout, waiter, Waiter } from '@stacks/api-toolkit';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Message, MessagePath } from './messages/index.js';
 import { MessageIngestionError, NoMessageTimeoutError, RedisReadTimeoutError } from './errors.js';
+
+// Import from the dist folder to avoid ESM-only module imports.
+import { logger as defaultLogger } from '@stacks/api-toolkit/dist/logger/index.js';
+import { timeout, waiter, Waiter } from '@stacks/api-toolkit/dist/helpers/time.js';
 
 export * from './messages/index.js';
 

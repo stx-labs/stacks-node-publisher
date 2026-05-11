@@ -150,6 +150,9 @@ export class StacksMessageStream {
     this.msgBatchSize = args.options?.batchSize ?? 100;
     this.xReadBlockMs = args.options?.readBlockMs ?? 1_000;
     this.xReadCommandTimeoutMs = args.options?.readCommandTimeoutMs ?? 10_000;
+    if (this.xReadCommandTimeoutMs !== 0 && this.xReadCommandTimeoutMs <= this.xReadBlockMs) {
+      throw new RangeError('readCommandTimeoutMs must be 0 or greater than readBlockMs');
+    }
     this.redisSocketKeepAliveInitialDelayMs =
       args.options?.redisSocketKeepAliveInitialDelayMs ?? 30_000;
     this.noMessageTimeoutMs = args.options?.noMessageTimeoutMs ?? 120_000;
@@ -401,6 +404,10 @@ export class StacksMessageStream {
       return await xReadGroup;
     }
 
+    // If the timeout wins the race, the Redis command may still reject later when the client is
+    // destroyed. Keep that losing promise observed so it cannot become an unhandled rejection.
+    void xReadGroup.catch(() => undefined);
+
     let timeoutId: NodeJS.Timeout | null = null;
     const commandTimeout = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
@@ -418,7 +425,9 @@ export class StacksMessageStream {
         });
         // Recreate the Redis client to reset the connection and try again. This is not a simple
         // reconnect, this is a full new stream connection.
-        await this.recreateRedisClient();
+        if (!this.abort.signal.aborted) {
+          await this.recreateRedisClient();
+        }
       }
       // Re-throw the error to be handled by the caller.
       throw error;

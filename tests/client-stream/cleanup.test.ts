@@ -48,6 +48,37 @@ describe('Cleanup tests', () => {
     await redisBroker.close();
   });
 
+  describe('stream option validation', () => {
+    test('rejects read command timeouts that are not greater than the Redis block timeout', () => {
+      assert.throws(
+        () =>
+          new StacksMessageStream({
+            appName: 'snp-client-test-invalid-timeout',
+            redisUrl: ENV.REDIS_URL,
+            redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+            options: {
+              readBlockMs: 1_000,
+              readCommandTimeoutMs: 1_000,
+            },
+          }),
+        /readCommandTimeoutMs must be 0 or greater than readBlockMs/
+      );
+
+      assert.doesNotThrow(
+        () =>
+          new StacksMessageStream({
+            appName: 'snp-client-test-disabled-timeout',
+            redisUrl: ENV.REDIS_URL,
+            redisStreamPrefix: ENV.REDIS_STREAM_KEY_PREFIX,
+            options: {
+              readBlockMs: 1_000,
+              readCommandTimeoutMs: 0,
+            },
+          })
+      );
+    });
+  });
+
   describe('chain tip stream trim', () => {
     test('client connections are handled during trim', async () => {
       await testWithFailCb(async fail => {
@@ -250,6 +281,7 @@ describe('Cleanup tests', () => {
         redisUrl: ENV.REDIS_URL,
         redisStreamPrefix: 'test-read-timeout:',
         options: {
+          readBlockMs: 50,
           readCommandTimeoutMs: readTimeoutMs,
         },
       });

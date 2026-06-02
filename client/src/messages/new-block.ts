@@ -296,6 +296,7 @@ export interface NewBlockMessage {
   pox_v1_unlock_height?: number;
   pox_v2_unlock_height?: number;
   pox_v3_unlock_height?: number;
+  pox_v4_unlock_height?: number;
   /** Available starting in epoch3, only included in blocks where the pox cycle rewards are first calculated */
   cycle_number?: number;
   /** AKA `coinbase_height`. In epoch2.x this is the same as `block_height`. In epoch3 this is used to track tenure heights. Only available starting in stacks-core 3.0.0.0.0-rc6 */

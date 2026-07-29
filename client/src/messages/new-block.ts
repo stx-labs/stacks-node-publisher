@@ -231,7 +231,11 @@ export type NewBlockEvent =
   | NewBlockNftMintEvent
   | NewBlockNftBurnEvent;
 
-export type NewBlockTransactionStatus = 'success' | 'abort_by_response' | 'abort_by_post_condition';
+export type NewBlockTransactionStatus =
+  | 'success'
+  | 'abort_by_response'
+  | 'abort_by_post_condition'
+  | 'problematic_skipped';
 
 export interface NewBlockExecutionCost {
   read_count: number;
@@ -248,7 +252,7 @@ export interface NewBlockTransaction {
   txid: string;
   tx_index: number;
   contract_interface: ClarityAbi | null;
-  /** @deprecated Use `contract_interface` instead. The node renamed `contract_abi` to `contract_interface`. */
+  /** @deprecated Use `contract_interface` instead. */
   contract_abi?: ClarityAbi | null;
   execution_cost: NewBlockExecutionCost;
   microblock_sequence: number | null;
@@ -256,6 +260,7 @@ export interface NewBlockTransaction {
   microblock_parent_hash: string | null;
   vm_error?: string | null;
   burnchain_op?: BurnchainOp | null;
+  problematic_skipped?: number;
 }
 
 export interface NewBlockMessage {
